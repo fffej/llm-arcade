@@ -1,0 +1,1470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bill, Bowl, Bluff</title>
+<style>
+  :root {
+    --bg0: #06070a;
+    --bg1: #110d17;
+    --panel: rgba(8, 9, 14, 0.84);
+    --mist: rgba(204, 239, 255, 0.16);
+    --bone: #f0e5d0;
+    --fungus: #ff7fae;
+    --blue: #4dc8ff;
+    --gold: #e6c56f;
+    --danger: #ff6a6f;
+    --good: #82e0b3;
+    --ink: #091116;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    color: var(--bone);
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at 50% -10%, rgba(77, 200, 255, 0.12), transparent 25%),
+      radial-gradient(circle at 20% 15%, rgba(255, 127, 174, 0.08), transparent 20%),
+      radial-gradient(circle at 80% 18%, rgba(230, 197, 111, 0.08), transparent 18%),
+      linear-gradient(180deg, var(--bg0), var(--bg1) 55%, #07080b);
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  .shell {
+    position: relative;
+    width: min(1360px, 100%);
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 5;
+    padding: 10px 14px;
+    border-radius: 999px;
+    text-decoration: none;
+    color: var(--bone);
+    background: rgba(8, 9, 14, 0.88);
+    border: 1px solid rgba(240, 229, 208, 0.16);
+    backdrop-filter: blur(8px);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    color: var(--gold);
+    border-color: rgba(230, 197, 111, 0.72);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(240, 229, 208, 0.08);
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.55),
+      inset 0 0 140px rgba(77, 200, 255, 0.06);
+    background:
+      radial-gradient(circle at 50% 12%, rgba(77, 200, 255, 0.06), transparent 22%),
+      linear-gradient(180deg, rgba(13, 16, 20, 0.98), rgba(8, 7, 11, 1));
+  }
+
+  .note {
+    margin-top: 12px;
+    text-align: center;
+    color: rgba(240, 229, 208, 0.72);
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="900" aria-label="Bill, Bowl, Bluff"></canvas>
+      <div class="note">Arrow keys move. Z picks up or drops the nearest object. X performs a committed display burst. C cycles BILL, FUR, EGG, SPUR. Enter or Space starts and restarts.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const TAU = Math.PI * 2;
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const angleDiff = (a, b) => {
+    let d = a - b;
+    while (d > Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    return Math.abs(d);
+  };
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+
+  const palette = {
+    blue: "#63cfff",
+    white: "#efe3d0",
+    pink: "#ff8ab6",
+    gold: "#e5c56a",
+    pebble: "#96a7b6"
+  };
+
+  const itemDefs = [
+    { kind: "bowl", color: "blue", radius: [18, 28], resonance: [1.2, 1.8] },
+    { kind: "shell", color: "white", radius: [14, 22], resonance: [1.1, 1.5] },
+    { kind: "berry", color: "pink", radius: [10, 15], resonance: [0.85, 1.1] },
+    { kind: "scrap", color: "blue", radius: [12, 18], resonance: [1.0, 1.3] },
+    { kind: "bone", color: "white", radius: [16, 24], resonance: [1.0, 1.4] },
+    { kind: "pebble", color: "pebble", radius: [8, 14], resonance: [0.7, 1.0] }
+  ];
+
+  const court = {
+    x: 135,
+    y: 120,
+    w: 1010,
+    h: 680
+  };
+  court.cx = court.x + court.w * 0.5;
+  court.judgeY = court.y + 72;
+  court.laneTop = court.y + 120;
+  court.laneBottom = court.y + court.h - 46;
+
+  const modeOrder = ["BILL", "FUR", "EGG", "SPUR"];
+  const modeColors = {
+    BILL: "#63cfff",
+    FUR: "#f6c15b",
+    EGG: "#82e0b3",
+    SPUR: "#ff6a6f"
+  };
+  const game = {
+    state: "title",
+    score: 0,
+    best: Number(localStorage.getItem("bill-bowl-bluff-best") || 0),
+    timeLeft: 60,
+    duration: 60,
+    interest: 34,
+    alarm: 8,
+    modeIndex: 0,
+    modeFatigue: { BILL: 0, FUR: 0, EGG: 0, SPUR: 0 },
+    display: null,
+    lastTime: 0,
+    message: "",
+    messageTimer: 0,
+    endReason: "The judge turned away.",
+    phrase: {
+      active: false,
+      timer: 0,
+      modeSet: new Set(),
+      contradictionAwarded: false
+    },
+    composureTimer: 0,
+    guideTimer: 1.2,
+    ambience: 0,
+    debrisClock: 5,
+    spawnClock: 0,
+    spawnRate: 1.3,
+    holdingId: null,
+    nearJudgePrev: false,
+    pickupPulse: 0,
+    streakGlow: 0
+  };
+
+  const player = {
+    x: court.cx,
+    y: court.y + court.h - 150,
+    vx: 0,
+    vy: 0,
+    radius: 20,
+    facing: -Math.PI / 2,
+    stepClock: 0,
+    commit: 0,
+    burstCooldown: 0,
+    bob: 0
+  };
+
+  let objects = [];
+  let patches = [];
+  let ripples = [];
+  let particles = [];
+  let scorePopups = [];
+
+  function currentMode() {
+    return modeOrder[game.modeIndex];
+  }
+
+  function queueMessage(text, time = 1.4) {
+    game.message = text;
+    game.messageTimer = time;
+  }
+
+  function addScore(amount, text, x, y, tint) {
+    game.score += amount;
+    scorePopups.push({
+      x,
+      y,
+      text: (amount >= 0 ? "+" : "") + amount + " " + text,
+      color: tint || (amount >= 0 ? "#f0e5d0" : "#ff7f86"),
+      life: 1.5
+    });
+  }
+
+  function makeObject(edgeBias = 0) {
+    const def = itemDefs[randInt(0, itemDefs.length - 1)];
+    const edge = randInt(0, 3);
+    let x;
+    let y;
+    if (edge === 0) {
+      x = court.x - 50;
+      y = rand(court.y + 140, court.y + court.h);
+    } else if (edge === 1) {
+      x = court.x + court.w + 50;
+      y = rand(court.y + 140, court.y + court.h);
+    } else if (edge === 2) {
+      x = rand(court.x, court.x + court.w);
+      y = court.y + court.h + 50;
+    } else {
+      x = rand(court.x, court.x + court.w);
+      y = court.y + 90;
+    }
+    const radius = rand(def.radius[0], def.radius[1]);
+    const targetX = court.cx + rand(-290 + edgeBias, 290 + edgeBias);
+    const targetY = rand(court.y + 220, court.y + court.h - 55);
+    const angle = Math.atan2(targetY - y, targetX - x);
+    return {
+      id: Math.random().toString(36).slice(2),
+      kind: def.kind,
+      colorKey: def.color,
+      color: palette[def.color],
+      x,
+      y,
+      vx: Math.cos(angle) * rand(26, 54),
+      vy: Math.sin(angle) * rand(26, 54),
+      radius,
+      resonance: rand(def.resonance[0], def.resonance[1]),
+      wet: 0,
+      ring: 0,
+      ringHue: palette[def.color],
+      charge: 0,
+      held: false,
+      settled: false,
+      shoveGlow: 0
+    };
+  }
+
+  function resetGame() {
+    objects = [];
+    patches = [];
+    ripples = [];
+    particles = [];
+    scorePopups = [];
+    game.state = "play";
+    game.score = 0;
+    game.timeLeft = 60;
+    game.interest = 34;
+    game.alarm = 8;
+    game.modeIndex = 0;
+    game.modeFatigue = { BILL: 0, FUR: 0, EGG: 0, SPUR: 0 };
+    game.display = null;
+    game.lastTime = 0;
+    game.message = "";
+    game.messageTimer = 0;
+    game.endReason = "The judge turned away.";
+    game.phrase = { active: false, timer: 0, modeSet: new Set(), contradictionAwarded: false };
+    game.composureTimer = 0;
+    game.guideTimer = 1.2;
+    game.ambience = 0;
+    game.debrisClock = 6;
+    game.spawnClock = 0;
+    game.spawnRate = 1.35;
+    game.holdingId = null;
+    game.nearJudgePrev = false;
+    game.pickupPulse = 0;
+    game.streakGlow = 0;
+    player.x = court.cx;
+    player.y = court.y + court.h - 150;
+    player.vx = 0;
+    player.vy = 0;
+    player.facing = -Math.PI / 2;
+    player.stepClock = 0;
+    player.commit = 0;
+    player.burstCooldown = 0;
+    player.bob = 0;
+    for (let i = 0; i < 15; i++) objects.push(makeObject());
+    queueMessage("Arrange a wet singing lane. The judge is watching.", 2.5);
+  }
+
+  function nearestObject(range = 58) {
+    let best = null;
+    let bestD = range;
+    for (const obj of objects) {
+      if (obj.held) continue;
+      const d = dist(player.x, player.y, obj.x, obj.y) - obj.radius;
+      if (d < bestD) {
+        bestD = d;
+        best = obj;
+      }
+    }
+    return best;
+  }
+
+  function spawnRipple(x, y, color, scale = 1) {
+    ripples.push({ x, y, color, radius: 8 * scale, life: 0.8, max: 90 * scale });
+  }
+
+  function sprinkle(x, y, color, count = 8, speed = 1) {
+    for (let i = 0; i < count; i++) {
+      const angle = rand(0, TAU);
+      const mag = rand(18, 80) * speed;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * mag,
+        vy: Math.sin(angle) * mag,
+        life: rand(0.35, 0.9),
+        color,
+        size: rand(1.5, 4.5)
+      });
+    }
+  }
+
+  function penalizePile(obj) {
+    let overlaps = 0;
+    for (const other of objects) {
+      if (other === obj || other.held) continue;
+      const d = dist(obj.x, obj.y, other.x, other.y);
+      if (d < obj.radius + other.radius - 4) overlaps++;
+    }
+    if (overlaps >= 2) {
+      addScore(-20, "messy pile", obj.x, obj.y - 16, "#ff7f86");
+      game.alarm = clamp(game.alarm + 5, 0, 100);
+      queueMessage("That pile reads as panic, not poise.", 1.3);
+    }
+  }
+
+  function dropHeldObject() {
+    const obj = objects.find((item) => item.id === game.holdingId);
+    if (!obj) return;
+    obj.held = false;
+    obj.x = clamp(player.x + Math.cos(player.facing) * 34, court.x + obj.radius + 10, court.x + court.w - obj.radius - 10);
+    obj.y = clamp(player.y + Math.sin(player.facing) * 34, court.y + 110, court.y + court.h - obj.radius - 12);
+    obj.vx = Math.cos(player.facing) * 55;
+    obj.vy = Math.sin(player.facing) * 55;
+    obj.settled = true;
+    game.holdingId = null;
+    penalizePile(obj);
+  }
+
+  function pickOrDrop() {
+    if (game.state !== "play") return;
+    if (player.commit > 0) return;
+    if (game.holdingId) {
+      dropHeldObject();
+      game.pickupPulse = 0.8;
+      return;
+    }
+    const target = nearestObject();
+    if (target) {
+      target.held = true;
+      target.vx = 0;
+      target.vy = 0;
+      game.holdingId = target.id;
+      game.pickupPulse = 0.8;
+    }
+  }
+
+  function wetDuration() {
+    const tension = game.timeLeft < 15 ? 0.72 : game.timeLeft < 30 ? 0.86 : 1;
+    return 4.4 * tension;
+  }
+
+  function createWetPatch(x, y, power = 1) {
+    patches.push({
+      x,
+      y,
+      radius: lerp(22, 36, power),
+      life: wetDuration() * lerp(0.4, 0.8, power)
+    });
+  }
+
+  function startPhrase(mode) {
+    if (!game.phrase.active || game.phrase.timer <= 0) {
+      game.phrase.active = true;
+      game.phrase.timer = 3.8;
+      game.phrase.modeSet = new Set([mode]);
+      game.phrase.contradictionAwarded = false;
+      return;
+    }
+    game.phrase.timer = 3.8;
+    game.phrase.modeSet.add(mode);
+    if (game.phrase.modeSet.size >= 3 && !game.phrase.contradictionAwarded) {
+      game.phrase.contradictionAwarded = true;
+      addScore(120, "contradiction", player.x, player.y - 42, "#ffd876");
+      game.interest = clamp(game.interest + 12, 0, 100);
+      game.streakGlow = 1;
+      queueMessage("The same instrument just changed species.", 1.5);
+    }
+  }
+
+  function evaluatePerspective(selected) {
+    if (selected.length < 3) return 0;
+    const seq = [...selected].sort((a, b) => a.obj.y - b.obj.y);
+    let gradient = 0;
+    let centered = 0;
+    for (let i = 0; i < seq.length - 1; i++) {
+      const a = seq[i].obj;
+      const b = seq[i + 1].obj;
+      if (a.radius < b.radius && a.y < b.y) gradient++;
+    }
+    for (const item of seq) {
+      const laneBias = 1 - clamp(Math.abs(item.obj.x - court.cx) / 220, 0, 1);
+      centered += laneBias;
+    }
+    const gradientScore = gradient / (seq.length - 1);
+    const centeredScore = centered / seq.length;
+    if (gradientScore > 0.74 && centeredScore > 0.62) return 100;
+    return 0;
+  }
+
+  function selectCascade(mode) {
+    const maxDist = mode === "SPUR" ? 290 : 250;
+    const cone = mode === "BILL" ? 0.9 : 0.68;
+    const selected = [];
+    for (const obj of objects) {
+      if (obj.held || obj.wet <= 0.08) continue;
+      const dx = obj.x - player.x;
+      const dy = obj.y - player.y;
+      const d = Math.hypot(dx, dy);
+      if (d > maxDist) continue;
+      const angle = Math.atan2(dy, dx);
+      const centered = angleDiff(angle, player.facing);
+      const curveAllowance = mode === "BILL" ? clamp(0.16 + (130 / (d + 40)) * 0.18, 0, 0.34) : 0;
+      if (centered <= cone + curveAllowance) {
+        selected.push({ obj, d, angle });
+      }
+    }
+    selected.sort((a, b) => a.d - b.d);
+    if (mode === "FUR" && selected.length) {
+      const chained = [...selected];
+      const used = new Set(chained.map((item) => item.obj.id));
+      let cursor = chained[chained.length - 1];
+      for (let loops = 0; loops < 5; loops++) {
+        let best = null;
+        let bestScore = 99999;
+        for (const obj of objects) {
+          if (used.has(obj.id) || obj.held || obj.wet <= 0.08) continue;
+          if (obj.colorKey !== cursor.obj.colorKey) continue;
+          const d = dist(cursor.obj.x, cursor.obj.y, obj.x, obj.y);
+          if (d < 150 && d < bestScore) {
+            bestScore = d;
+            best = obj;
+          }
+        }
+        if (!best) break;
+        chained.push({ obj: best, d: dist(player.x, player.y, best.x, best.y), angle: Math.atan2(best.y - player.y, best.x - player.x) });
+        used.add(best.id);
+        cursor = chained[chained.length - 1];
+      }
+      chained.sort((a, b) => a.d - b.d);
+      return chained;
+    }
+    return selected;
+  }
+
+  function burstDisplay() {
+    if (game.state !== "play") return;
+    if (player.commit > 0 || player.burstCooldown > 0) return;
+    const mode = currentMode();
+    const selected = selectCascade(mode);
+    player.commit = 0.78;
+    player.burstCooldown = 0.28;
+    startPhrase(mode);
+
+    const clutter = objects.filter((obj) => !obj.held && dist(obj.x, obj.y, player.x, player.y) < 70 + obj.radius).length;
+    if (selected.length < 2) {
+      addScore(-15, "dead phrase", player.x, player.y - 26, "#ff7f86");
+      game.alarm = clamp(game.alarm + 8, 0, 100);
+      queueMessage("Too dry. Too sparse. The line did not sing.", 1.2);
+    }
+    if (clutter >= 4) {
+      game.alarm = clamp(game.alarm + 5, 0, 100);
+      queueMessage("You performed into clutter.", 1.1);
+    }
+
+    let totalValue = 0;
+    let chainBonus = 0;
+    let lastColor = "";
+    if (selected.length) {
+      game.display = {
+        mode,
+        timer: 0.78,
+        max: 0.78,
+        selected,
+        index: 0
+      };
+    }
+
+    selected.forEach((entry, index) => {
+      const obj = entry.obj;
+      const t = index * 0.12;
+      const accent = mode === "SPUR" && entry.d < 120 ? 2 : 1;
+      const value = Math.round(18 * obj.resonance * accent * (mode === "FUR" && obj.colorKey === lastColor ? 1.35 : 1));
+      totalValue += value;
+      if (index > 0 && obj.colorKey === lastColor) chainBonus += 10;
+      lastColor = obj.colorKey;
+      obj.charge = mode === "FUR" ? 1.4 : obj.charge;
+      obj.shoveGlow = mode === "SPUR" ? 1 : 0.6;
+      obj._ringAt = t;
+    });
+
+    if (selected.length >= 3) {
+      addScore(60, "cascade", player.x + Math.cos(player.facing) * 70, player.y + Math.sin(player.facing) * 70, "#8be2bd");
+      game.interest = clamp(game.interest + 8 + selected.length * 1.5, 0, 100);
+    }
+
+    const perspectiveBonus = evaluatePerspective(selected);
+    if (perspectiveBonus) {
+      addScore(perspectiveBonus, "perspective", court.cx, court.laneTop + 40, "#63cfff");
+      game.interest = clamp(game.interest + 12, 0, 100);
+      queueMessage("The runway suddenly deepened.", 1.1);
+    }
+
+    if (chainBonus > 0) {
+      addScore(chainBonus, "color chain", player.x, player.y - 58, "#ff95bc");
+      game.interest = clamp(game.interest + 4, 0, 100);
+    }
+
+    if (mode === "SPUR") {
+      game.alarm = clamp(game.alarm + 11 + selected.length * 1.3, 0, 100);
+      if (selected.length >= 3) {
+        addScore(40, "sting flourish", selected[selected.length - 1].obj.x, selected[selected.length - 1].obj.y - 18, "#ffb37f");
+      }
+    } else if (selected.length >= 2) {
+      game.alarm = clamp(game.alarm - 2, 0, 100);
+    }
+
+    const fatigue = game.modeFatigue[mode];
+    const fatiguePenalty = fatigue > 2 ? fatigue * 2 : 0;
+    if (fatiguePenalty) {
+      game.interest = clamp(game.interest - fatiguePenalty, 0, 100);
+    }
+    for (const key of modeOrder) game.modeFatigue[key] = Math.max(0, game.modeFatigue[key] - 0.3);
+    game.modeFatigue[mode] += 1.1;
+    game.score += Math.round(totalValue);
+    game.streakGlow = 1;
+    if (totalValue > 0) {
+      scorePopups.push({
+        x: player.x,
+        y: player.y - 82,
+        text: "phrase " + Math.round(totalValue),
+        color: modeColors[mode],
+        life: 1.2
+      });
+    }
+    sprinkle(player.x + Math.cos(player.facing) * 44, player.y + Math.sin(player.facing) * 44, modeColors[mode], 12, 1.1);
+  }
+
+  function cycleMode() {
+    if (game.state !== "play") return;
+    game.modeIndex = (game.modeIndex + 1) % modeOrder.length;
+    if (currentMode() === "BILL") game.guideTimer = 1.05;
+    queueMessage(currentMode() + " mode", 0.8);
+  }
+
+  function endRun(reason) {
+    game.state = "over";
+    game.endReason = reason;
+    if (game.score > game.best) {
+      game.best = game.score;
+      localStorage.setItem("bill-bowl-bluff-best", String(game.best));
+    }
+  }
+
+  function handleInput(dt) {
+    const ax = (keys.has("ArrowRight") ? 1 : 0) - (keys.has("ArrowLeft") ? 1 : 0);
+    const ay = (keys.has("ArrowDown") ? 1 : 0) - (keys.has("ArrowUp") ? 1 : 0);
+    const len = Math.hypot(ax, ay) || 1;
+    const speed = player.commit > 0 ? 90 : 238;
+    const targetVX = ax / len * speed;
+    const targetVY = ay / len * speed;
+    player.vx = lerp(player.vx, targetVX, player.commit > 0 ? 0.08 : 0.18);
+    player.vy = lerp(player.vy, targetVY, player.commit > 0 ? 0.08 : 0.18);
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+    player.x = clamp(player.x, court.x + 28, court.x + court.w - 28);
+    player.y = clamp(player.y, court.y + 150, court.y + court.h - 34);
+    if (Math.hypot(player.vx, player.vy) > 12) {
+      player.facing = Math.atan2(player.vy, player.vx);
+    }
+    player.bob += dt * Math.hypot(player.vx, player.vy) * 0.02;
+
+    if (currentMode() === "EGG" && Math.hypot(player.vx, player.vy) > 60) {
+      player.stepClock -= dt;
+      if (player.stepClock <= 0) {
+        player.stepClock = 0.13;
+        createWetPatch(player.x + rand(-5, 5), player.y + rand(-5, 5), 0.7);
+      }
+    } else {
+      player.stepClock = Math.max(0, player.stepClock - dt);
+    }
+
+    if (game.holdingId) {
+      const obj = objects.find((item) => item.id === game.holdingId);
+      if (obj) {
+        obj.held = true;
+        obj.x = player.x + Math.cos(player.facing) * 36;
+        obj.y = player.y + Math.sin(player.facing) * 36 - 4;
+      }
+    }
+  }
+
+  function updateObjects(dt) {
+    const late = game.timeLeft < 15;
+    for (const obj of objects) {
+      if (obj.held) continue;
+      obj.wet = Math.max(0, obj.wet - dt);
+      obj.ring = Math.max(0, obj.ring - dt * 1.4);
+      obj.charge = Math.max(0, obj.charge - dt * 0.8);
+      obj.shoveGlow = Math.max(0, obj.shoveGlow - dt * 1.4);
+
+      if (!obj.held) {
+        obj.x += obj.vx * dt;
+        obj.y += obj.vy * dt;
+        obj.vx *= obj.settled ? 0.86 : 0.98;
+        obj.vy *= obj.settled ? 0.86 : 0.98;
+      }
+
+      if (obj.x < court.x + obj.radius || obj.x > court.x + court.w - obj.radius) obj.vx *= -0.5;
+      if (obj.y < court.y + 92 + obj.radius || obj.y > court.y + court.h - obj.radius) obj.vy *= -0.5;
+      obj.x = clamp(obj.x, court.x + obj.radius, court.x + court.w - obj.radius);
+      obj.y = clamp(obj.y, court.y + 92 + obj.radius, court.y + court.h - obj.radius);
+
+      for (const patch of patches) {
+        if (dist(obj.x, obj.y, patch.x, patch.y) < patch.radius + obj.radius * 0.45) {
+          obj.wet = Math.max(obj.wet, patch.life * 0.9);
+        }
+      }
+    }
+
+    for (let i = 0; i < objects.length; i++) {
+      const a = objects[i];
+      if (a.held) continue;
+      for (let j = i + 1; j < objects.length; j++) {
+        const b = objects[j];
+        if (b.held) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy) || 0.0001;
+        const min = a.radius + b.radius + 2;
+        if (d < min) {
+          const push = (min - d) * 0.5;
+          const nx = dx / d;
+          const ny = dy / d;
+          a.x -= nx * push;
+          a.y -= ny * push;
+          b.x += nx * push;
+          b.y += ny * push;
+          a.vx -= nx * 8;
+          a.vy -= ny * 8;
+          b.vx += nx * 8;
+          b.vy += ny * 8;
+        }
+      }
+    }
+
+    const maxObjects = game.timeLeft > 42 ? 20 : game.timeLeft > 22 ? 26 : 34;
+    while (objects.length > maxObjects) {
+      const far = objects.find((obj) => !obj.held && (obj.x < court.x - 10 || obj.x > court.x + court.w + 10 || obj.y > court.y + court.h + 20));
+      if (!far) break;
+      objects.splice(objects.indexOf(far), 1);
+    }
+
+    if (late) {
+      game.debrisClock -= dt;
+      if (game.debrisClock <= 0) {
+        game.debrisClock = rand(2.1, 3.8);
+        const nuisance = objects.filter((obj) => !obj.held && obj.y < court.y + court.h - 90);
+        for (let i = 0; i < Math.min(3, nuisance.length); i++) {
+          const obj = nuisance[randInt(0, nuisance.length - 1)];
+          obj.vx += rand(-90, 90);
+          obj.vy += rand(30, 90);
+          obj.shoveGlow = 1;
+        }
+        queueMessage("Rival debris disturbed the runway.", 1.2);
+      }
+    }
+  }
+
+  function updateDisplay(dt) {
+    if (!game.display) return;
+    const display = game.display;
+    display.timer -= dt;
+    const elapsed = display.max - display.timer;
+    while (display.index < display.selected.length && elapsed >= display.selected[display.index].obj._ringAt) {
+      const obj = display.selected[display.index].obj;
+      obj.ring = 1.2;
+      obj.ringHue = modeColors[display.mode];
+      spawnRipple(obj.x, obj.y, obj.color, 1 + obj.resonance * 0.3);
+      sprinkle(obj.x, obj.y, obj.color, 8, 0.8 + obj.resonance * 0.2);
+      display.index++;
+    }
+    if (display.timer <= 0) {
+      game.display = null;
+    }
+  }
+
+  function updateWorld(dt) {
+    const tension = 1 - game.timeLeft / game.duration;
+    game.spawnRate = game.timeLeft > 40 ? 1.35 : game.timeLeft > 18 ? 0.95 : 0.62;
+    game.spawnClock -= dt;
+    if (game.spawnClock <= 0 && objects.length < 38) {
+      game.spawnClock = game.spawnRate;
+      objects.push(makeObject(rand(-80, 80)));
+    }
+
+    game.timeLeft = Math.max(0, game.timeLeft - dt);
+    game.interest = clamp(game.interest - dt * 1.2, 0, 100);
+    game.alarm = clamp(game.alarm - dt * (game.timeLeft < 15 ? 1.2 : 1.6), 0, 100);
+    if (game.timeLeft < 15) game.alarm = clamp(game.alarm + dt * 1.25, 0, 100);
+    game.ambience += dt;
+    game.pickupPulse = Math.max(0, game.pickupPulse - dt * 1.3);
+    game.streakGlow = Math.max(0, game.streakGlow - dt * 1.1);
+    if (game.messageTimer > 0) game.messageTimer -= dt;
+
+    if (game.phrase.active) {
+      game.phrase.timer -= dt;
+      if (game.phrase.timer <= 0) {
+        game.phrase.active = false;
+        game.phrase.modeSet.clear();
+      }
+    }
+
+    if (game.guideTimer > 0) game.guideTimer -= dt;
+    player.commit = Math.max(0, player.commit - dt);
+    player.burstCooldown = Math.max(0, player.burstCooldown - dt);
+
+    handleInput(dt);
+    updateObjects(dt);
+    updateDisplay(dt);
+
+    for (const patch of patches) patch.life -= dt;
+    patches = patches.filter((patch) => patch.life > 0);
+
+    for (const ripple of ripples) {
+      ripple.life -= dt;
+      ripple.radius = lerp(ripple.radius, ripple.max, dt * 3.4);
+    }
+    ripples = ripples.filter((r) => r.life > 0);
+
+    for (const p of particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.97;
+      p.vy *= 0.97;
+    }
+    particles = particles.filter((p) => p.life > 0);
+
+    for (const popup of scorePopups) {
+      popup.life -= dt;
+      popup.y -= 28 * dt;
+    }
+    scorePopups = scorePopups.filter((item) => item.life > 0);
+
+    const nearJudge = player.y < court.y + 220;
+    if (nearJudge) {
+      game.alarm = clamp(game.alarm + dt * 8, 0, 100);
+      if (!game.nearJudgePrev) queueMessage("Too close. The judge recoils.", 1.1);
+    }
+    game.nearJudgePrev = nearJudge;
+
+    if (game.interest > 70 && game.alarm < 30) {
+      game.composureTimer += dt;
+      if (game.composureTimer >= 10) {
+        game.composureTimer = 0;
+        addScore(80, "composure", court.cx, court.y + 46, "#9fe4c4");
+        queueMessage("The judge leaned in and stayed.", 1.2);
+      }
+    } else {
+      game.composureTimer = Math.max(0, game.composureTimer - dt * 0.6);
+    }
+
+    if (game.alarm >= 100) {
+      endRun("ALARM filled. The judge bolted.");
+      return;
+    }
+    if (game.timeLeft <= 0) {
+      endRun("The ritual minute ended.");
+    }
+  }
+
+  function drawBackground() {
+    const shimmer = Math.sin(game.ambience * 0.7) * 0.5 + 0.5;
+    const grad = ctx.createLinearGradient(0, court.y, 0, court.y + court.h);
+    grad.addColorStop(0, "#0b1014");
+    grad.addColorStop(0.35, "#12141b");
+    grad.addColorStop(1, "#09090d");
+    ctx.fillStyle = grad;
+    ctx.fillRect(court.x, court.y, court.w, court.h);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(court.x, court.y, court.w, court.h);
+    ctx.clip();
+
+    for (let i = 0; i < 22; i++) {
+      const y = court.y + 36 + i * 28;
+      ctx.strokeStyle = `rgba(90, 145, 168, ${0.02 + i * 0.002})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(court.x, y);
+      ctx.lineTo(court.x + court.w, y);
+      ctx.stroke();
+    }
+
+    const laneGrad = ctx.createLinearGradient(court.cx, court.laneBottom, court.cx, court.laneTop);
+    laneGrad.addColorStop(0, "rgba(29, 35, 44, 0.16)");
+    laneGrad.addColorStop(0.45, `rgba(64, 120, 170, ${0.09 + shimmer * 0.06})`);
+    laneGrad.addColorStop(1, "rgba(195, 236, 255, 0.14)");
+    ctx.fillStyle = laneGrad;
+    ctx.beginPath();
+    ctx.moveTo(court.cx - 240, court.laneBottom);
+    ctx.lineTo(court.cx + 240, court.laneBottom);
+    ctx.lineTo(court.cx + 62, court.laneTop);
+    ctx.lineTo(court.cx - 62, court.laneTop);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < 16; i++) {
+      const t = i / 15;
+      const half = lerp(240, 62, t);
+      const y = lerp(court.laneBottom, court.laneTop, t);
+      ctx.strokeStyle = `rgba(170, 225, 255, ${0.05 + (1 - t) * 0.08})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(court.cx - half, y);
+      ctx.lineTo(court.cx + half, y);
+      ctx.stroke();
+    }
+
+    if (game.guideTimer > 0 && currentMode() === "BILL" && game.state === "play") {
+      const alpha = game.guideTimer / 1.05;
+      ctx.strokeStyle = `rgba(99, 207, 255, ${0.32 * alpha})`;
+      ctx.lineWidth = 3;
+      ctx.setLineDash([10, 12]);
+      ctx.beginPath();
+      ctx.moveTo(court.cx - 132, court.laneBottom - 6);
+      ctx.lineTo(court.cx - 38, court.laneTop + 18);
+      ctx.moveTo(court.cx + 132, court.laneBottom - 6);
+      ctx.lineTo(court.cx + 38, court.laneTop + 18);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      for (let i = 0; i < 5; i++) {
+        const t = i / 4;
+        const y = lerp(court.laneBottom - 26, court.laneTop + 40, t);
+        const spread = lerp(146, 45, t);
+        ctx.beginPath();
+        ctx.moveTo(court.cx - spread, y);
+        ctx.lineTo(court.cx - spread + 18, y - 12);
+        ctx.lineTo(court.cx - spread + 14, y + 8);
+        ctx.closePath();
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.moveTo(court.cx + spread, y);
+        ctx.lineTo(court.cx + spread - 18, y - 12);
+        ctx.lineTo(court.cx + spread - 14, y + 8);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    for (let i = 0; i < 55; i++) {
+      const x = court.x + ((i * 97) % court.w);
+      const y = court.y + ((i * 43 + 80) % court.h);
+      const r = 1.5 + ((i * 13) % 9) * 0.16;
+      ctx.fillStyle = i % 5 === 0 ? "rgba(255, 127, 174, 0.08)" : "rgba(130, 224, 179, 0.05)";
+      ctx.beginPath();
+      ctx.arc(x, y, r, 0, TAU);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(240, 229, 208, 0.08)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(court.x, court.y, court.w, court.h);
+  }
+
+  function drawJudge() {
+    const alarmShake = game.alarm / 100 * 5;
+    const interestLean = game.interest / 100 * 12;
+    const x = court.cx + Math.sin(game.ambience * 2.1) * alarmShake;
+    const y = court.judgeY + interestLean;
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = "rgba(5, 6, 9, 0.9)";
+    ctx.beginPath();
+    ctx.ellipse(0, -4, 78, 42, 0, 0, TAU);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-110, 46);
+    ctx.quadraticCurveTo(-58, 0, -26, 10);
+    ctx.quadraticCurveTo(0, 18, 26, 10);
+    ctx.quadraticCurveTo(58, 0, 110, 46);
+    ctx.lineTo(110, -10);
+    ctx.lineTo(-110, -10);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = `rgba(240, 229, 208, ${0.18 + game.interest / 100 * 0.2})`;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(-20, -8, 7, 0, TAU);
+    ctx.arc(20, -8, 7, 0, TAU);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(77, 200, 255, 0.16)";
+    ctx.beginPath();
+    ctx.ellipse(0, 16, 52 + game.interest * 0.12, 14, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawPatches() {
+    for (const patch of patches) {
+      const alpha = clamp(patch.life / wetDuration(), 0, 1);
+      const grad = ctx.createRadialGradient(patch.x, patch.y, 3, patch.x, patch.y, patch.radius);
+      grad.addColorStop(0, `rgba(145, 237, 255, ${0.22 * alpha})`);
+      grad.addColorStop(1, "rgba(145, 237, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(patch.x, patch.y, patch.radius, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawObject(obj) {
+    ctx.save();
+    ctx.translate(obj.x, obj.y);
+    if (obj.kind === "bowl") {
+      ctx.fillStyle = "rgba(255,255,255,0.06)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, obj.radius * 1.2, obj.radius * 0.82, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = obj.color;
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(0, -1, obj.radius * 1.15, obj.radius * 0.72, 0, 0, TAU);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(240,229,208,0.4)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(0, 2, obj.radius * 0.65, 0.3, Math.PI - 0.3);
+      ctx.stroke();
+    } else if (obj.kind === "shell") {
+      ctx.fillStyle = "rgba(240,229,208,0.14)";
+      ctx.beginPath();
+      ctx.moveTo(-obj.radius, obj.radius * 0.22);
+      ctx.quadraticCurveTo(0, -obj.radius, obj.radius, obj.radius * 0.22);
+      ctx.quadraticCurveTo(0, obj.radius * 0.92, -obj.radius, obj.radius * 0.22);
+      ctx.fill();
+      ctx.strokeStyle = obj.color;
+      ctx.lineWidth = 2;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * obj.radius * 0.28, obj.radius * 0.16);
+        ctx.lineTo(i * obj.radius * 0.14, -obj.radius * 0.56);
+        ctx.stroke();
+      }
+    } else if (obj.kind === "berry") {
+      ctx.fillStyle = obj.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, obj.radius, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "rgba(255,255,255,0.28)";
+      ctx.beginPath();
+      ctx.arc(-obj.radius * 0.26, -obj.radius * 0.3, obj.radius * 0.36, 0, TAU);
+      ctx.fill();
+    } else if (obj.kind === "scrap") {
+      ctx.fillStyle = "rgba(99,207,255,0.13)";
+      ctx.beginPath();
+      ctx.moveTo(-obj.radius * 0.9, -obj.radius * 0.4);
+      ctx.lineTo(-obj.radius * 0.2, -obj.radius);
+      ctx.lineTo(obj.radius, -obj.radius * 0.15);
+      ctx.lineTo(obj.radius * 0.35, obj.radius);
+      ctx.lineTo(-obj.radius, obj.radius * 0.45);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = obj.color;
+      ctx.lineWidth = 2.4;
+      ctx.stroke();
+    } else if (obj.kind === "bone") {
+      ctx.strokeStyle = obj.color;
+      ctx.lineWidth = obj.radius * 0.38;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(-obj.radius * 0.8, obj.radius * 0.28);
+      ctx.lineTo(obj.radius * 0.8, -obj.radius * 0.28);
+      ctx.stroke();
+      ctx.fillStyle = obj.color;
+      for (const [bx, by] of [[-obj.radius * 0.85, obj.radius * 0.28], [obj.radius * 0.85, -obj.radius * 0.28]]) {
+        ctx.beginPath();
+        ctx.arc(bx + 4, by, obj.radius * 0.26, 0, TAU);
+        ctx.arc(bx - 4, by, obj.radius * 0.26, 0, TAU);
+        ctx.fill();
+      }
+    } else {
+      ctx.fillStyle = "rgba(150,167,182,0.2)";
+      ctx.beginPath();
+      ctx.moveTo(-obj.radius * 0.9, -obj.radius * 0.2);
+      ctx.lineTo(-obj.radius * 0.3, -obj.radius * 0.9);
+      ctx.lineTo(obj.radius * 0.7, -obj.radius * 0.55);
+      ctx.lineTo(obj.radius * 0.9, obj.radius * 0.1);
+      ctx.lineTo(obj.radius * 0.25, obj.radius * 0.8);
+      ctx.lineTo(-obj.radius * 0.8, obj.radius * 0.45);
+      ctx.closePath();
+      ctx.fill();
+      ctx.strokeStyle = obj.color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
+
+    if (obj.wet > 0) {
+      ctx.strokeStyle = `rgba(145, 237, 255, ${0.15 + Math.min(obj.wet / 4, 0.25)})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, obj.radius + 4, 0, TAU);
+      ctx.stroke();
+    }
+    if (obj.charge > 0) {
+      ctx.strokeStyle = `rgba(255, 198, 102, ${obj.charge * 0.28})`;
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.arc(0, 0, obj.radius + 8 + Math.sin(game.ambience * 10) * 2, 0, TAU);
+      ctx.stroke();
+    }
+    if (obj.ring > 0) {
+      for (let i = 0; i < 3; i++) {
+        const r = obj.radius + 10 + i * 12 + (1 - obj.ring) * 30;
+        ctx.strokeStyle = `rgba(240,229,208, ${0.22 * obj.ring * (1 - i * 0.18)})`;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.arc(0, 0, r, 0, TAU);
+        ctx.stroke();
+      }
+    }
+    if (obj.shoveGlow > 0) {
+      ctx.strokeStyle = `rgba(255,106,111, ${obj.shoveGlow * 0.35})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, obj.radius + 12, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    const mode = currentMode();
+    const body = modeColors[mode];
+    const stride = Math.sin(player.bob) * 4;
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.facing + Math.PI / 2);
+
+    if (player.commit > 0) {
+      const arc = easeOut(1 - player.commit / 0.78);
+      ctx.strokeStyle = `rgba(240,229,208, ${0.22 + arc * 0.3})`;
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.arc(0, 18, 58 + arc * 26, -1.05, 1.05);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#0b1418";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 26, 42, 0, 0, TAU);
+    ctx.fill();
+
+    ctx.fillStyle = body;
+    if (mode === "BILL") {
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 24, 38, 0, 0, TAU);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(-22, -12);
+      ctx.quadraticCurveTo(0, -28, 22, -12);
+      ctx.lineTo(16, 2);
+      ctx.quadraticCurveTo(0, -6, -16, 2);
+      ctx.closePath();
+      ctx.fill();
+    } else if (mode === "FUR") {
+      ctx.beginPath();
+      ctx.ellipse(0, 4, 28, 39, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 230, 170, 0.5)";
+      ctx.lineWidth = 2;
+      for (let i = -3; i <= 3; i++) {
+        ctx.beginPath();
+        ctx.moveTo(i * 6, -22);
+        ctx.lineTo(i * 8, -34 - Math.abs(i) * 2);
+        ctx.stroke();
+      }
+    } else if (mode === "EGG") {
+      ctx.beginPath();
+      ctx.ellipse(0, 6, 22, 34, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = "#d6fff0";
+      ctx.beginPath();
+      ctx.ellipse(0, 8, 10, 14, 0, 0, TAU);
+      ctx.fill();
+      ctx.fillStyle = body;
+    } else {
+      ctx.beginPath();
+      ctx.ellipse(0, 2, 24, 38, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255, 135, 142, 0.9)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(10, 26);
+      ctx.lineTo(24, 42);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#091116";
+    ctx.beginPath();
+    ctx.arc(0, -8, 9, 0, TAU);
+    ctx.fill();
+    ctx.fillStyle = "#f0e5d0";
+    ctx.beginPath();
+    ctx.arc(-3, -10, 2, 0, TAU);
+    ctx.arc(3, -10, 2, 0, TAU);
+    ctx.fill();
+
+    ctx.fillStyle = mode === "BILL" ? "#84d8ff" : "#d8c287";
+    ctx.beginPath();
+    ctx.ellipse(0, -22, mode === "BILL" ? 16 : 11, 10, 0, 0, TAU);
+    ctx.fill();
+
+    ctx.strokeStyle = body;
+    ctx.lineWidth = 4;
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    ctx.moveTo(-10, 30);
+    ctx.lineTo(-12 + stride, 46);
+    ctx.moveTo(10, 30);
+    ctx.lineTo(12 - stride, 46);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawRipplesAndParticles() {
+    for (const ripple of ripples) {
+      ctx.strokeStyle = ripple.color.replace(")", "");
+      const alpha = clamp(ripple.life / 0.8, 0, 1);
+      ctx.strokeStyle = ripple.color.startsWith("#")
+        ? hexToRgba(ripple.color, 0.3 * alpha)
+        : `rgba(240,229,208,${0.3 * alpha})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ripple.x, ripple.y, ripple.radius, 0, TAU);
+      ctx.stroke();
+    }
+    for (const p of particles) {
+      const alpha = clamp(p.life, 0, 1);
+      ctx.fillStyle = p.color.startsWith("#") ? hexToRgba(p.color, alpha * 0.8) : p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, TAU);
+      ctx.fill();
+    }
+  }
+
+  function drawHUD() {
+    ctx.fillStyle = "rgba(8, 9, 14, 0.76)";
+    ctx.fillRect(26, 22, 306, 132);
+    ctx.fillRect(W - 274, 22, 248, 132);
+    ctx.strokeStyle = "rgba(240,229,208,0.1)";
+    ctx.strokeRect(26, 22, 306, 132);
+    ctx.strokeRect(W - 274, 22, 248, 132);
+
+    ctx.fillStyle = "#f0e5d0";
+    ctx.font = "700 24px Georgia, serif";
+    ctx.fillText("Bill, Bowl, Bluff", 42, 52);
+    ctx.font = "15px Trebuchet MS, sans-serif";
+    ctx.fillStyle = "rgba(240,229,208,0.8)";
+    ctx.fillText("Score " + Math.floor(game.score), 42, 82);
+    ctx.fillText("Best " + Math.floor(game.best), 154, 82);
+    ctx.fillText("Time " + Math.ceil(game.timeLeft), 42, 106);
+
+    const mode = currentMode();
+    ctx.fillStyle = modeColors[mode];
+    ctx.fillRect(42, 116, 86, 18);
+    ctx.fillStyle = "#091116";
+    ctx.font = "700 12px Trebuchet MS, sans-serif";
+    ctx.fillText(mode, 52, 129);
+    ctx.fillStyle = "rgba(240,229,208,0.78)";
+    ctx.font = "13px Trebuchet MS, sans-serif";
+    ctx.fillText("Z pick/drop  X burst  C cycle", 140, 129);
+
+    drawMeter(W - 250, 48, 200, 16, game.interest, "#82e0b3", "INTEREST");
+    drawMeter(W - 250, 96, 200, 16, game.alarm, "#ff6a6f", "ALARM");
+
+    const phraseCount = game.phrase.modeSet.size;
+    ctx.fillStyle = "rgba(240,229,208,0.72)";
+    ctx.font = "13px Trebuchet MS, sans-serif";
+    ctx.fillText("Phrase modes " + phraseCount + "/3", W - 250, 136);
+
+    if (game.messageTimer > 0 && game.message) {
+      const alpha = clamp(game.messageTimer, 0, 1);
+      ctx.fillStyle = `rgba(8, 9, 14, ${0.72 * alpha})`;
+      ctx.fillRect(W * 0.5 - 240, H - 88, 480, 42);
+      ctx.strokeStyle = `rgba(240,229,208, ${0.16 * alpha})`;
+      ctx.strokeRect(W * 0.5 - 240, H - 88, 480, 42);
+      ctx.fillStyle = `rgba(240,229,208, ${0.95 * alpha})`;
+      ctx.font = "15px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText(game.message, W * 0.5, H - 61);
+      ctx.textAlign = "left";
+    }
+
+    for (const popup of scorePopups) {
+      ctx.fillStyle = popup.color.startsWith("#") ? hexToRgba(popup.color, clamp(popup.life / 1.2, 0, 1)) : popup.color;
+      ctx.font = "700 18px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText(popup.text, popup.x, popup.y);
+      ctx.textAlign = "left";
+    }
+  }
+
+  function drawMeter(x, y, w, h, value, color, label) {
+    ctx.fillStyle = "rgba(240,229,208,0.1)";
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w * (value / 100), h);
+    ctx.strokeStyle = "rgba(240,229,208,0.16)";
+    ctx.strokeRect(x, y, w, h);
+    ctx.fillStyle = "rgba(240,229,208,0.82)";
+    ctx.font = "12px Trebuchet MS, sans-serif";
+    ctx.fillText(label, x, y - 8);
+  }
+
+  function drawTitleScreen() {
+    drawBackground();
+    drawJudge();
+    drawPatches();
+    for (const obj of objects) drawObject(obj);
+    drawPlayer();
+    ctx.fillStyle = "rgba(5, 6, 9, 0.72)";
+    ctx.fillRect(170, 138, W - 340, H - 276);
+    ctx.strokeStyle = "rgba(240,229,208,0.14)";
+    ctx.strokeRect(170, 138, W - 340, H - 276);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f0e5d0";
+    ctx.font = "700 52px Georgia, serif";
+    ctx.fillText("Bill, Bowl, Bluff", W / 2, 236);
+    ctx.fillStyle = "#63cfff";
+    ctx.font = "20px Trebuchet MS, sans-serif";
+    ctx.fillText("Build a glowing runway. Wet it. Reinterpret it by changing anatomy mid-performance.", W / 2, 278);
+
+    const lines = [
+      "The judge sits at the far end. Interest rises for deliberate perspective, color logic, and controlled variety.",
+      "Alarm rises if you overplay SPUR, dance into clutter, or rush the judge.",
+      "The same arrangement should read differently in BILL, FUR, EGG, and SPUR."
+    ];
+    ctx.fillStyle = "rgba(240,229,208,0.84)";
+    ctx.font = "18px Georgia, serif";
+    lines.forEach((line, i) => ctx.fillText(line, W / 2, 344 + i * 34));
+
+    const cards = [
+      ["BILL", "Hints the best lane and bends display waves toward nearby objects."],
+      ["FUR", "Extends color-matched chains. Great for ghost chords and longer phrases."],
+      ["EGG", "Leaves wet footprints. Wet objects are the ones that can actually sing."],
+      ["SPUR", "Doubles nearby resonance and can finish a cascade hard, but scares the judge."]
+    ];
+    cards.forEach((card, i) => {
+      const x = 210 + (i % 2) * 430;
+      const y = 436 + Math.floor(i / 2) * 118;
+      ctx.fillStyle = "rgba(13, 17, 22, 0.88)";
+      ctx.fillRect(x, y, 330, 88);
+      ctx.strokeStyle = hexToRgba(modeColors[card[0]], 0.46);
+      ctx.strokeRect(x, y, 330, 88);
+      ctx.fillStyle = modeColors[card[0]];
+      ctx.font = "700 20px Trebuchet MS, sans-serif";
+      ctx.fillText(card[0], x + 56, y + 30);
+      ctx.fillStyle = "rgba(240,229,208,0.82)";
+      ctx.font = "15px Trebuchet MS, sans-serif";
+      wrapText(card[1], x + 18, y + 56, 294, 19);
+    });
+
+    ctx.fillStyle = "rgba(240,229,208,0.92)";
+    ctx.font = "700 24px Georgia, serif";
+    ctx.fillText("Arrow keys move   Z pick/drop   X burst   C cycle", W / 2, 702);
+    ctx.fillStyle = "rgba(240,229,208,0.68)";
+    ctx.font = "18px Trebuchet MS, sans-serif";
+    ctx.fillText("Press Enter or Space to start the 60-second courtship panic.", W / 2, 742);
+    ctx.textAlign = "left";
+  }
+
+  function drawGameOver() {
+    drawBackground();
+    drawJudge();
+    drawPatches();
+    for (const obj of objects) drawObject(obj);
+    drawPlayer();
+    drawRipplesAndParticles();
+    drawHUD();
+
+    ctx.fillStyle = "rgba(5, 6, 9, 0.74)";
+    ctx.fillRect(250, 200, W - 500, 420);
+    ctx.strokeStyle = "rgba(240,229,208,0.16)";
+    ctx.strokeRect(250, 200, W - 500, 420);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f0e5d0";
+    ctx.font = "700 50px Georgia, serif";
+    ctx.fillText("Performance Over", W / 2, 278);
+    ctx.fillStyle = "rgba(240,229,208,0.82)";
+    ctx.font = "22px Georgia, serif";
+    ctx.fillText(game.endReason, W / 2, 324);
+    ctx.fillStyle = "#63cfff";
+    ctx.font = "700 34px Trebuchet MS, sans-serif";
+    ctx.fillText("Score " + Math.floor(game.score), W / 2, 392);
+    ctx.fillStyle = "rgba(240,229,208,0.8)";
+    ctx.font = "22px Trebuchet MS, sans-serif";
+    ctx.fillText("Best " + Math.floor(game.best), W / 2, 432);
+    ctx.fillText("Interest " + Math.floor(game.interest) + "   Alarm " + Math.floor(game.alarm), W / 2, 470);
+
+    ctx.font = "18px Trebuchet MS, sans-serif";
+    ctx.fillStyle = "rgba(240,229,208,0.74)";
+    ctx.fillText("Higher scores come from clean wet cascades, strong size gradients, and 3-mode phrases.", W / 2, 528);
+    ctx.fillText("Press Enter or Space to perform again.", W / 2, 566);
+    ctx.textAlign = "left";
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+    drawJudge();
+    drawPatches();
+    for (const obj of objects.slice().sort((a, b) => a.y - b.y)) drawObject(obj);
+    drawPlayer();
+    drawRipplesAndParticles();
+    if (game.state === "play") drawHUD();
+    if (game.state === "title") drawTitleScreen();
+    if (game.state === "over") drawGameOver();
+  }
+
+  function update(dt) {
+    if (game.state === "play") updateWorld(dt);
+  }
+
+  function loop(ts) {
+    if (!game.lastTime) game.lastTime = ts;
+    const dt = clamp((ts - game.lastTime) / 1000, 0, 0.033);
+    game.lastTime = ts;
+    update(dt);
+    render();
+    pressed.clear();
+    requestAnimationFrame(loop);
+  }
+
+  function hexToRgba(hex, alpha) {
+    const clean = hex.replace("#", "");
+    const full = clean.length === 3
+      ? clean.split("").map((c) => c + c).join("")
+      : clean;
+    const num = parseInt(full, 16);
+    const r = (num >> 16) & 255;
+    const g = (num >> 8) & 255;
+    const b = num & 255;
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+
+  function wrapText(text, x, y, maxWidth, lineHeight) {
+    const words = text.split(" ");
+    let line = "";
+    let offsetY = 0;
+    for (const word of words) {
+      const test = line ? line + " " + word : word;
+      if (ctx.measureText(test).width > maxWidth) {
+        ctx.fillText(line, x, y + offsetY);
+        line = word;
+        offsetY += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, y + offsetY);
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "z", "x", "c", "Z", "X", "C"].includes(event.key)) {
+      event.preventDefault();
+    }
+    if (!keys.has(event.key)) pressed.add(event.key);
+    keys.add(event.key);
+
+    if ((event.key === "Enter" || event.key === " ") && game.state !== "play") {
+      resetGame();
+      return;
+    }
+    if (game.state !== "play") return;
+    if (event.key === "z" || event.key === "Z") pickOrDrop();
+    if (event.key === "x" || event.key === "X") burstDisplay();
+    if (event.key === "c" || event.key === "C") cycleMode();
+  });
+
+  window.addEventListener("keyup", (event) => {
+    keys.delete(event.key);
+  });
+
+  for (let i = 0; i < 14; i++) {
+    const obj = makeObject();
+    obj.x = court.cx + rand(-220, 220);
+    obj.y = court.y + 200 + i * 25;
+    obj.vx = rand(-12, 12);
+    obj.vy = rand(-8, 8);
+    obj.settled = true;
+    if (i % 3 === 0) obj.wet = wetDuration() * 0.8;
+    objects.push(obj);
+  }
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
