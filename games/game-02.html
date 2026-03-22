@@ -1,0 +1,1211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Monotreme Fever</title>
+<style>
+  :root {
+    --bg-deep: #10151b;
+    --bg-mid: #1d2530;
+    --salt: #f3efe2;
+    --salt-blue: #dcebf5;
+    --ink: #171819;
+    --panel: rgba(18, 24, 31, 0.82);
+    --line: rgba(255, 255, 255, 0.14);
+    --ice: #aee8ff;
+    --frost: #ebfbff;
+    --heat: #ff9250;
+    --fever: #ffb347;
+    --danger: #ff6d63;
+    --good: #9cf08b;
+    --gate: #f6efe1;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      radial-gradient(circle at top, rgba(255, 166, 86, 0.14), transparent 30%),
+      radial-gradient(circle at 20% 20%, rgba(164, 226, 255, 0.12), transparent 24%),
+      linear-gradient(180deg, var(--bg-mid), var(--bg-deep));
+    color: #f7f9fb;
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1180px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 2;
+    color: var(--frost);
+    text-decoration: none;
+    background: rgba(8, 11, 15, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 999px;
+    padding: 10px 14px;
+    font-size: 14px;
+    letter-spacing: 0.04em;
+    backdrop-filter: blur(7px);
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(174, 232, 255, 0.7);
+    color: var(--ice);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 26px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background:
+      radial-gradient(circle at 30% 18%, rgba(255, 183, 71, 0.08), transparent 18%),
+      linear-gradient(180deg, rgba(12, 17, 22, 0.8), rgba(10, 14, 18, 0.92));
+    box-shadow:
+      0 24px 90px rgba(0, 0, 0, 0.42),
+      inset 0 0 80px rgba(255, 255, 255, 0.03);
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    color: rgba(247, 249, 251, 0.72);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 780px) {
+    body {
+      padding: 10px;
+    }
+
+    .back-link {
+      font-size: 13px;
+      padding: 9px 12px;
+    }
+
+    .frame {
+      padding-top: 58px;
+    }
+
+    .note {
+      font-size: 12px;
+      line-height: 1.5;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1200" height="820" aria-label="Monotreme Fever"></canvas>
+      <div class="note">Arrow keys select and heat. Down triggers a cold snap. A/D tilt wind during ice. Space flips stance.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const arena = { x: 58, y: 118, w: 1040, h: 622 };
+  const gateStripX = arena.x + arena.w - 114;
+  const gateW = 102;
+  const gateGap = 20;
+  const gateH = (arena.h - gateGap * 2) / 3;
+  const gateY = i => arena.y + i * (gateH + gateGap);
+  const leftEscapeX = arena.x - 12;
+  const rightWall = gateStripX - 16;
+  const traitColors = {
+    MAMMAL: "#ffd38e",
+    EGG: "#f5f0de",
+    VENOM: "#98f77e",
+    DUCK: "#8ddfff",
+    FUR: "#ffb0a8"
+  };
+  const traitPool = ["MAMMAL", "EGG", "VENOM", "DUCK", "FUR"];
+  const pairPool = [
+    ["MAMMAL", "EGG"],
+    ["MAMMAL", "VENOM"],
+    ["DUCK", "FUR"],
+    ["EGG", "VENOM"],
+    ["DUCK", "MAMMAL"],
+    ["FUR", "EGG"],
+    ["VENOM", "DUCK"]
+  ];
+  const rng = {
+    range(min, max) { return min + Math.random() * (max - min); },
+    int(min, max) { return Math.floor(this.range(min, max + 1)); },
+    pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  };
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+
+  const keys = new Set();
+  const pressed = new Set();
+
+  let state = "title";
+  let stateTime = 0;
+  let score = 0;
+  let best = 0;
+  let timeLeft = 60;
+  let chaos = 0;
+  let selection = 0;
+  let worldTime = 0;
+  let waveIndex = 0;
+  let waveTimer = 0;
+  let nextSpawnTimer = 0;
+  let coldCooldown = 0;
+  let wind = 0;
+  let windVisual = 0;
+  let screenShake = 0;
+  let endReason = "timer";
+
+  const coldSnap = {
+    active: false,
+    time: 0,
+    duration: 1.05,
+    launchedCount: 0,
+    infectedDeliveries: 0,
+    snapIndex: 0
+  };
+
+  const specimens = [];
+  const floaters = [];
+  const particles = [];
+  const rings = [];
+  const cracks = [];
+  const heatPings = [];
+  const cracksPattern = [];
+
+  const gates = [0, 1, 2].map(i => ({
+    x: gateStripX,
+    y: gateY(i),
+    w: gateW,
+    h: gateH,
+    trait: traitPool[i],
+    flash: 0,
+    crack: 0
+  }));
+
+  function makeSaltCracks() {
+    cracksPattern.length = 0;
+    for (let i = 0; i < 28; i++) {
+      const sx = rng.range(arena.x + 30, rightWall - 70);
+      const sy = rng.range(arena.y + 30, arena.y + arena.h - 30);
+      const segments = [];
+      let x = sx;
+      let y = sy;
+      const count = rng.int(3, 6);
+      for (let j = 0; j < count; j++) {
+        x += rng.range(-48, 48);
+        y += rng.range(-36, 36);
+        x = clamp(x, arena.x + 18, rightWall - 28);
+        y = clamp(y, arena.y + 18, arena.y + arena.h - 18);
+        segments.push({ x, y });
+      }
+      cracksPattern.push({ sx, sy, segments });
+    }
+  }
+
+  function resetGame() {
+    stateTime = 0;
+    score = 0;
+    timeLeft = 60;
+    chaos = 0;
+    selection = 0;
+    worldTime = 0;
+    waveIndex = 1;
+    waveTimer = 7.5;
+    nextSpawnTimer = 0.3;
+    coldCooldown = 0;
+    wind = 0;
+    windVisual = 0;
+    screenShake = 0;
+    endReason = "timer";
+    coldSnap.active = false;
+    coldSnap.time = 0;
+    coldSnap.duration = 1.05;
+    coldSnap.launchedCount = 0;
+    coldSnap.infectedDeliveries = 0;
+    coldSnap.snapIndex = 0;
+    specimens.length = 0;
+    floaters.length = 0;
+    particles.length = 0;
+    rings.length = 0;
+    cracks.length = 0;
+    heatPings.length = 0;
+    gates.forEach((gate, i) => {
+      gate.trait = traitPool[(i + waveIndex) % traitPool.length];
+      gate.flash = 0;
+      gate.crack = 0;
+    });
+    makeSaltCracks();
+    for (let i = 0; i < 6; i++) spawnSpecimen(true);
+  }
+
+  function startGame() {
+    resetGame();
+    state = "play";
+  }
+
+  function endGame(reason) {
+    state = "gameover";
+    stateTime = 0;
+    endReason = reason;
+    best = Math.max(best, score);
+  }
+
+  function currentDifficulty() {
+    const progress = 1 - timeLeft / 60;
+    return {
+      progress,
+      targetCount: progress < 0.22 ? 6 : progress < 0.5 ? 8 : progress < 0.8 ? 10 : 12,
+      spawnDelay: progress < 0.22 ? 2.1 : progress < 0.5 ? 1.55 : progress < 0.8 ? 1.15 : 0.85,
+      infectionRange: progress < 0.22 ? 72 : progress < 0.5 ? 84 : progress < 0.8 ? 92 : 108,
+      gateRotate: progress < 0.22 ? 8.5 : progress < 0.5 ? 7.2 : progress < 0.8 ? 6 : 4.8,
+      coldDuration: timeLeft <= 15 ? 0.72 : progress < 0.5 ? 1.05 : 0.92,
+      windDrift: progress < 0.22 ? 38 : progress < 0.5 ? 52 : progress < 0.8 ? 70 : 90
+    };
+  }
+
+  function spawnSpecimen(initial = false) {
+    const difficulty = currentDifficulty();
+    const pair = rng.pick(pairPool);
+    const leftCluster = initial ? rng.range(0.18, 0.68) : rng.range(0.08, 0.72);
+    const x = arena.x + arena.w * leftCluster;
+    const y = rng.range(arena.y + 40, arena.y + arena.h - 40);
+    const stance = rng.int(0, 1);
+    const specimen = {
+      id: Math.random().toString(36).slice(2),
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      r: rng.range(18, 28),
+      pair,
+      stance,
+      heat: rng.range(0.05, 0.3),
+      heatGlow: 0,
+      heatHold: rng.range(0.3, 0.9),
+      moving: false,
+      launchDelay: Infinity,
+      launchVector: { x: 0, y: 0 },
+      infected: 0,
+      copiedFromDance: false,
+      wasInfectedMove: false,
+      deliveredThisSnap: false,
+      bornAt: worldTime,
+      lastSwapAt: -99,
+      lastFlipTrait: pair[stance],
+      wrongGateCooldown: 0,
+      shellTilt: rng.range(0, Math.PI * 2),
+      wiggle: rng.range(0, Math.PI * 2),
+      bounce: rng.range(0, Math.PI * 2),
+      stamp: rng.range(-0.28, 0.28),
+      escapeGrace: 0.25 + rng.range(0, 0.3),
+      shellCrack: 0,
+      massBias: rng.range(0.85, 1.15),
+      feverHue: rng.range(0, 1)
+    };
+    const spread = initial ? 44 : 62;
+    for (const other of specimens) {
+      if (dist(specimen.x, specimen.y, other.x, other.y) < specimen.r + other.r + spread) {
+        specimen.x = clamp(specimen.x + rng.range(-80, 80), arena.x + 30, rightWall - 48);
+        specimen.y = clamp(specimen.y + rng.range(-60, 60), arena.y + 28, arena.y + arena.h - 28);
+      }
+    }
+    specimens.push(specimen);
+    selection = clamp(selection, 0, specimens.length - 1);
+  }
+
+  function activeTrait(specimen) {
+    return specimen.pair[specimen.stance];
+  }
+
+  function traitBehavior(specimen, trait) {
+    const base = {
+      drag: 0.992,
+      wind: 1,
+      launch: 1,
+      infection: 1,
+      decay: 1,
+      ricochet: 1
+    };
+    if (trait === "MAMMAL") {
+      base.drag = 0.986;
+      base.launch = 0.95;
+    } else if (trait === "EGG") {
+      base.drag = 0.994;
+      base.launch = 1.1;
+      base.ricochet = 0.88;
+    } else if (trait === "VENOM") {
+      base.infection = 1.28;
+      base.launch = 1.04;
+    } else if (trait === "DUCK") {
+      base.wind = 1.38;
+      base.drag = 0.993;
+    } else if (trait === "FUR") {
+      base.decay = 0.75;
+      base.drag = 0.982;
+    }
+    return base;
+  }
+
+  function addFloater(text, x, y, color, size = 22) {
+    floaters.push({ text, x, y, color, age: 0, size });
+  }
+
+  function addParticles(x, y, color, count, speed) {
+    for (let i = 0; i < count; i++) {
+      const a = rng.range(0, Math.PI * 2);
+      const s = rng.range(speed * 0.3, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: rng.range(0.4, 0.95),
+        maxLife: 1,
+        size: rng.range(2, 5),
+        color
+      });
+    }
+  }
+
+  function addRing(x, y, color, maxR, life, line = 3) {
+    rings.push({ x, y, color, maxR, life, maxLife: life, line });
+  }
+
+  function inputPressed(code) {
+    if (pressed.has(code)) {
+      pressed.delete(code);
+      return true;
+    }
+    return false;
+  }
+
+  function cycleSelection(dir) {
+    if (!specimens.length) return;
+    selection = (selection + dir + specimens.length) % specimens.length;
+  }
+
+  function selectedSpecimen() {
+    if (!specimens.length) return null;
+    selection = clamp(selection, 0, specimens.length - 1);
+    return specimens[selection];
+  }
+
+  function heatSelected() {
+    const s = selectedSpecimen();
+    if (!s) return;
+    s.heat = clamp(s.heat + 0.68, 0, 4.5);
+    s.heatGlow = 1;
+    s.shellCrack = clamp(s.shellCrack + 0.05, 0, 1);
+    heatPings.push({ x: s.x, y: s.y, age: 0, maxAge: 0.4 });
+    addParticles(s.x, s.y, "#ff9b56", 16, 70);
+    addFloater("HEAT", s.x, s.y - s.r - 10, "#ffb36f", 16);
+  }
+
+  function flipSelected() {
+    const s = selectedSpecimen();
+    if (!s) return;
+    s.stance = 1 - s.stance;
+    s.lastSwapAt = worldTime;
+    s.lastFlipTrait = activeTrait(s);
+    addRing(s.x, s.y, traitColors[activeTrait(s)], s.r + 30, 0.32, 2);
+    addFloater(activeTrait(s), s.x, s.y - s.r - 16, traitColors[activeTrait(s)], 16);
+  }
+
+  function beginColdSnap() {
+    if (coldCooldown > 0 || coldSnap.active || !specimens.length) return;
+    const difficulty = currentDifficulty();
+    coldSnap.active = true;
+    coldSnap.time = difficulty.coldDuration;
+    coldSnap.duration = difficulty.coldDuration;
+    coldSnap.launchedCount = 0;
+    coldSnap.infectedDeliveries = 0;
+    coldSnap.snapIndex += 1;
+    coldCooldown = timeLeft <= 15 ? 1.2 : 1.8;
+    screenShake = 8;
+    addParticles(arena.x + arena.w * 0.5, arena.y + arena.h * 0.5, "#d9f4ff", 38, 120);
+    for (const s of specimens) {
+      const behavior = traitBehavior(s, activeTrait(s));
+      const heatRatio = clamp(s.heat / 4.2, 0, 1);
+      s.launchDelay = 0.82 - heatRatio * 0.67;
+      s.launchDelay *= behavior.decay;
+      s.launchDelay = clamp(s.launchDelay, 0.06, difficulty.coldDuration * 0.92);
+      s.deliveredThisSnap = false;
+      if (!s.moving && s.heat < 0.12) s.launchDelay += 0.14;
+    }
+  }
+
+  function rotateGates(force = false) {
+    waveIndex += 1;
+    waveTimer = currentDifficulty().gateRotate;
+    const previous = gates.map(g => g.trait);
+    for (let i = 0; i < gates.length; i++) {
+      let candidate = traitPool[(waveIndex + i + rng.int(0, 2)) % traitPool.length];
+      let guard = 0;
+      while ((candidate === previous[i] || gates.some((g, idx) => idx < i && g.trait === candidate)) && guard < 12) {
+        candidate = traitPool[rng.int(0, traitPool.length - 1)];
+        guard += 1;
+      }
+      gates[i].trait = candidate;
+      gates[i].flash = force ? 0.2 : 0.75;
+    }
+  }
+
+  function triggerDance(source, target, radius) {
+    if (target.infected > 0.08 || target.wrongGateCooldown > 0.1) return;
+    target.infected = 0.72;
+    target.wasInfectedMove = true;
+    target.copiedFromDance = true;
+    const sourceSpeed = Math.hypot(source.vx, source.vy);
+    const pull = sourceSpeed > 30 ? sourceSpeed : 240;
+    const angle = Math.atan2(source.vy, source.vx);
+    target.vx = Math.cos(angle) * pull * 0.9;
+    target.vy = Math.sin(angle) * pull * 0.9;
+    target.moving = true;
+    addRing(target.x, target.y, "#ffe389", radius * 0.55, 0.34, 3);
+    addFloater("FEVER", target.x, target.y - target.r - 8, "#ffe389", 15);
+  }
+
+  function deliverSpecimen(index, gate, matched) {
+    const s = specimens[index];
+    if (!s) return;
+    if (matched) {
+      let gained = 100;
+      if (s.wasInfectedMove) {
+        gained += 40;
+        coldSnap.infectedDeliveries += 1;
+      }
+      if (coldSnap.active && coldSnap.infectedDeliveries >= 2 && s.wasInfectedMove) {
+        gained *= coldSnap.infectedDeliveries;
+        addFloater("x" + coldSnap.infectedDeliveries, gate.x - 20, gate.y + 30, "#fff2b0", 20);
+      }
+      if (worldTime - s.lastSwapAt < 1.1) gained += 25;
+      score += gained;
+      gate.flash = 1;
+      addRing(gate.x + gate.w * 0.42, s.y, traitColors[gate.trait], 42, 0.45, 4);
+      addParticles(gate.x + 14, s.y, traitColors[gate.trait], 18, 95);
+      addFloater("+" + gained, gate.x - 12, s.y - 12, "#b8ff9b", 24);
+      specimens.splice(index, 1);
+      selection = clamp(selection, 0, specimens.length - 1);
+      return;
+    }
+
+    score -= 35;
+    chaos = clamp(chaos + 11, 0, 100);
+    gate.crack = clamp(gate.crack + 0.35, 0, 1);
+    gate.flash = 0.6;
+    s.vx = -Math.abs(s.vx) * 0.72 - 110;
+    s.vy += rng.range(-60, 60);
+    s.x = gate.x - s.r - 5;
+    s.wrongGateCooldown = 0.45;
+    screenShake = 10;
+    cracks.push({ x: gate.x + 18, y: s.y, age: 0, maxAge: 1.4 });
+    addParticles(gate.x + 8, s.y, "#f8f1e7", 16, 110);
+    addFloater("-35", gate.x + 18, s.y - 8, "#ff9186", 22);
+  }
+
+  function updateTitle(dt) {
+    if (inputPressed("Enter") || inputPressed("Space")) startGame();
+  }
+
+  function updatePlay(dt) {
+    timeLeft = Math.max(0, timeLeft - dt);
+    worldTime += dt;
+    waveTimer -= dt;
+    nextSpawnTimer -= dt;
+    coldCooldown = Math.max(0, coldCooldown - dt);
+    screenShake = Math.max(0, screenShake - dt * 20);
+
+    if (waveTimer <= 0) rotateGates();
+
+    const difficulty = currentDifficulty();
+    if (specimens.length < difficulty.targetCount && nextSpawnTimer <= 0) {
+      spawnSpecimen();
+      nextSpawnTimer = difficulty.spawnDelay * rng.range(0.72, 1.15);
+    }
+
+    if (inputPressed("ArrowLeft")) cycleSelection(-1);
+    if (inputPressed("ArrowRight")) cycleSelection(1);
+    if (inputPressed("ArrowUp")) heatSelected();
+    if (inputPressed("Space")) flipSelected();
+    if (inputPressed("ArrowDown")) beginColdSnap();
+
+    const windInput = (keys.has("KeyD") ? 1 : 0) - (keys.has("KeyA") ? 1 : 0);
+    const windTarget = coldSnap.active ? windInput : 0;
+    wind = lerp(wind, windTarget, 0.1);
+    windVisual = lerp(windVisual, wind, 0.08);
+
+    if (coldSnap.active) {
+      coldSnap.time -= dt;
+      if (coldSnap.time <= 0) {
+        coldSnap.active = false;
+        wind *= 0.4;
+      }
+    }
+
+    for (let i = heatPings.length - 1; i >= 0; i--) {
+      const ping = heatPings[i];
+      ping.age += dt;
+      if (ping.age >= ping.maxAge) heatPings.splice(i, 1);
+    }
+
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const ring = rings[i];
+      ring.life -= dt;
+      if (ring.life <= 0) rings.splice(i, 1);
+    }
+
+    for (let i = cracks.length - 1; i >= 0; i--) {
+      cracks[i].age += dt;
+      if (cracks[i].age >= cracks[i].maxAge) cracks.splice(i, 1);
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.97;
+      p.vy *= 0.97;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i];
+      f.age += dt;
+      f.y -= 24 * dt;
+      if (f.age >= 1) floaters.splice(i, 1);
+    }
+
+    for (let i = gates.length - 1; i >= 0; i--) {
+      gates[i].flash = Math.max(0, gates[i].flash - dt * 1.8);
+      gates[i].crack = Math.max(0, gates[i].crack - dt * 0.08);
+    }
+
+    for (let i = specimens.length - 1; i >= 0; i--) {
+      const s = specimens[i];
+      const trait = activeTrait(s);
+      const behavior = traitBehavior(s, trait);
+      const heatLoss = coldSnap.active ? 0.18 : 0.1;
+      s.heat = Math.max(0, s.heat - dt * heatLoss * behavior.decay);
+      s.heatGlow = Math.max(0, s.heatGlow - dt * 1.5);
+      s.wiggle += dt * (0.8 + s.heat * 0.2);
+      s.bounce += dt * (2.2 + Math.hypot(s.vx, s.vy) * 0.005);
+      s.shellTilt += dt * 0.18;
+      s.infected = Math.max(0, s.infected - dt);
+      s.wrongGateCooldown = Math.max(0, s.wrongGateCooldown - dt);
+
+      if (coldSnap.active && !s.moving) {
+        s.launchDelay -= dt;
+        if (s.launchDelay <= 0) {
+          const power = (220 + s.heat * 68) * behavior.launch;
+          const angle = rng.range(-0.38, 0.38) + wind * 0.24;
+          s.vx = Math.cos(angle) * power + 120;
+          s.vy = Math.sin(angle) * power;
+          s.moving = true;
+          s.wasInfectedMove = false;
+          s.copiedFromDance = false;
+          s.launchDelay = Infinity;
+          coldSnap.launchedCount += 1;
+          addRing(s.x, s.y, "#dff7ff", s.r + 20, 0.25, 2);
+          addParticles(s.x, s.y, "#e7f7ff", 10, 60);
+        }
+      }
+
+      if (s.moving) {
+        s.vx += wind * difficulty.windDrift * behavior.wind * dt;
+        if (coldSnap.active) {
+          s.vx *= 1.0005;
+          s.vy *= 1.0005;
+        }
+        s.vx *= Math.pow(behavior.drag, dt * 60);
+        s.vy *= Math.pow(behavior.drag, dt * 60);
+        if (!coldSnap.active) {
+          s.vx *= Math.pow(0.958, dt * 60);
+          s.vy *= Math.pow(0.958, dt * 60);
+        }
+        s.x += s.vx * dt;
+        s.y += s.vy * dt;
+        if (Math.hypot(s.vx, s.vy) < 14) {
+          s.moving = false;
+          s.vx = 0;
+          s.vy = 0;
+          s.copiedFromDance = false;
+          s.deliveredThisSnap = false;
+        }
+      }
+
+      if (s.y < arena.y + s.r) {
+        s.y = arena.y + s.r;
+        s.vy = Math.abs(s.vy) * 0.82;
+      } else if (s.y > arena.y + arena.h - s.r) {
+        s.y = arena.y + arena.h - s.r;
+        s.vy = -Math.abs(s.vy) * 0.82;
+      }
+
+      if (s.x < leftEscapeX - s.r - s.escapeGrace * 20) {
+        score -= 50;
+        chaos = clamp(chaos + (timeLeft <= 15 ? 18 : 13), 0, 100);
+        addFloater("-50", arena.x + 26, s.y, "#ff8479", 24);
+        addParticles(arena.x + 8, s.y, "#fff5f3", 14, 90);
+        specimens.splice(i, 1);
+        selection = clamp(selection, 0, specimens.length - 1);
+        continue;
+      }
+
+      if (s.x > rightWall - s.r) {
+        let handled = false;
+        for (const gate of gates) {
+          if (s.y > gate.y + 12 && s.y < gate.y + gate.h - 12 && s.x + s.r > gate.x) {
+            deliverSpecimen(i, gate, activeTrait(s) === gate.trait);
+            handled = true;
+            break;
+          }
+        }
+        if (handled) continue;
+        s.x = rightWall - s.r;
+        s.vx = -Math.abs(s.vx) * 0.7;
+      }
+    }
+
+    for (let i = 0; i < specimens.length; i++) {
+      const a = specimens[i];
+      for (let j = i + 1; j < specimens.length; j++) {
+        const b = specimens[j];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const d = Math.hypot(dx, dy) || 1;
+        const minD = a.r + b.r + 3;
+        if (d < minD) {
+          const overlap = (minD - d) * 0.5;
+          const nx = dx / d;
+          const ny = dy / d;
+          a.x -= nx * overlap;
+          a.y -= ny * overlap;
+          b.x += nx * overlap;
+          b.y += ny * overlap;
+          a.vx -= nx * 12;
+          a.vy -= ny * 12;
+          b.vx += nx * 12;
+          b.vy += ny * 12;
+        }
+        const infectionRadius = difficulty.infectionRange * traitBehavior(a, activeTrait(a)).infection;
+        if (a.moving && dist(a.x, a.y, b.x, b.y) < infectionRadius) triggerDance(a, b, infectionRadius);
+        const reverseRadius = difficulty.infectionRange * traitBehavior(b, activeTrait(b)).infection;
+        if (b.moving && dist(a.x, a.y, b.x, b.y) < reverseRadius) triggerDance(b, a, reverseRadius);
+      }
+    }
+
+    if (chaos >= 100) endGame("chaos");
+    else if (timeLeft <= 0) endGame("timer");
+  }
+
+  function updateGameOver(dt) {
+    if (inputPressed("Enter") || inputPressed("Space")) {
+      state = "title";
+      stateTime = 0;
+    }
+  }
+
+  function update(dt) {
+    stateTime += dt;
+    if (state === "title") updateTitle(dt);
+    else if (state === "play") updatePlay(dt);
+    else if (state === "gameover") updateGameOver(dt);
+  }
+
+  function drawBackground() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0c1015";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(screenShake ? rng.range(-screenShake, screenShake) : 0, screenShake ? rng.range(-screenShake, screenShake) : 0);
+
+    const panelGrad = ctx.createLinearGradient(0, arena.y, 0, arena.y + arena.h);
+    panelGrad.addColorStop(0, "#f7f1e2");
+    panelGrad.addColorStop(0.45, "#eff3ef");
+    panelGrad.addColorStop(1, "#d7e7f1");
+    ctx.fillStyle = panelGrad;
+    roundRect(ctx, arena.x, arena.y, arena.w, arena.h, 28, true);
+
+    const drawerGrad = ctx.createLinearGradient(0, arena.y - 16, 0, arena.y + arena.h + 16);
+    drawerGrad.addColorStop(0, "rgba(0, 0, 0, 0.24)");
+    drawerGrad.addColorStop(0.15, "rgba(255, 255, 255, 0.05)");
+    drawerGrad.addColorStop(1, "rgba(0, 0, 0, 0.18)");
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 1.5;
+    roundRect(ctx, arena.x - 12, arena.y - 12, arena.w + 24, arena.h + 24, 34, true, true, drawerGrad);
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.08)";
+    for (const crack of cracksPattern) {
+      ctx.beginPath();
+      ctx.moveTo(crack.sx, crack.sy);
+      for (const seg of crack.segments) ctx.lineTo(seg.x, seg.y);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(22, 26, 30, 0.9)";
+    ctx.fillRect(arena.x + 24, arena.y + 22, 182, 48);
+    ctx.fillRect(arena.x + 220, arena.y + 22, 192, 48);
+    ctx.fillRect(arena.x + 428, arena.y + 22, 220, 48);
+    labelText("CLIMATE OPERATOR", arena.x + 36, arena.y + 53, "#f4efe1", 18, 0.14);
+    labelText("ILLEGAL EXHIBIT", arena.x + 232, arena.y + 53, "#ffe0a3", 18, 0.14);
+    labelText("MONOTREME FEVER", arena.x + 440, arena.y + 53, "#d8efff", 18, 0.14);
+
+    ctx.fillStyle = "rgba(17, 22, 27, 0.92)";
+    ctx.fillRect(arena.x + 18, arena.y + arena.h - 60, rightWall - arena.x - 30, 40);
+    labelText("HEAT TO FREEZE FIRST. LET THE DANCE OUTBREAK DO THE SORTING.", arena.x + 30, arena.y + arena.h - 33, "#fff4dd", 16, 0.11);
+
+    if (coldSnap.active) {
+      const alpha = 0.14 + 0.12 * (coldSnap.time / coldSnap.duration);
+      const iceGrad = ctx.createLinearGradient(arena.x, arena.y, arena.x, arena.y + arena.h);
+      iceGrad.addColorStop(0, `rgba(183, 239, 255, ${alpha * 0.5})`);
+      iceGrad.addColorStop(0.5, `rgba(220, 248, 255, ${alpha})`);
+      iceGrad.addColorStop(1, `rgba(146, 224, 255, ${alpha * 0.45})`);
+      ctx.fillStyle = iceGrad;
+      roundRect(ctx, arena.x + 6, arena.y + 6, rightWall - arena.x - 12, arena.h - 12, 22, true);
+      drawWindRibbons();
+    }
+
+    drawGates();
+    ctx.restore();
+  }
+
+  function drawGates() {
+    for (const gate of gates) {
+      const glow = gate.flash;
+      const grad = ctx.createLinearGradient(gate.x, gate.y, gate.x + gate.w, gate.y);
+      grad.addColorStop(0, "rgba(24, 28, 31, 0.9)");
+      grad.addColorStop(1, "rgba(43, 49, 54, 0.92)");
+      ctx.fillStyle = grad;
+      roundRect(ctx, gate.x, gate.y, gate.w, gate.h, 18, true);
+
+      ctx.strokeStyle = `rgba(255,255,255,${0.13 + glow * 0.6})`;
+      ctx.lineWidth = 1.2;
+      roundRect(ctx, gate.x, gate.y, gate.w, gate.h, 18, false, true);
+
+      ctx.fillStyle = "rgba(246, 239, 225, 0.92)";
+      ctx.fillRect(gate.x + 18, gate.y + 18, gate.w - 36, 42);
+      labelText(gate.trait, gate.x + 24, gate.y + 47, "#121518", 17, 0.13);
+      labelText("ARCHIVE", gate.x + 22, gate.y + gate.h - 24, "#e8f4ff", 14, 0.12);
+
+      ctx.fillStyle = `rgba(255,255,255,${gate.crack * 0.5})`;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.moveTo(gate.x + 16 + i * 14, gate.y + gate.h * 0.45);
+        ctx.lineTo(gate.x + 26 + i * 11, gate.y + gate.h * 0.27);
+        ctx.lineTo(gate.x + 36 + i * 12, gate.y + gate.h * 0.53);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawWindRibbons() {
+    const strength = Math.abs(windVisual);
+    if (strength < 0.06) return;
+    ctx.save();
+    ctx.globalAlpha = 0.45 + strength * 0.25;
+    ctx.strokeStyle = "rgba(233, 248, 255, 0.95)";
+    ctx.lineWidth = 2;
+    for (let y = arena.y + 90; y < arena.y + arena.h - 70; y += 68) {
+      const dir = Math.sign(windVisual);
+      ctx.beginPath();
+      const startX = dir > 0 ? arena.x + 40 : rightWall - 40;
+      ctx.moveTo(startX, y);
+      for (let i = 1; i <= 6; i++) {
+        const x = startX + dir * i * 80;
+        const wave = Math.sin(stateTime * 6 + i + y * 0.03) * 10;
+        ctx.lineTo(x, y + wave);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawSpecimens() {
+    ctx.save();
+    ctx.translate(screenShake ? rng.range(-screenShake * 0.2, screenShake * 0.2) : 0, screenShake ? rng.range(-screenShake * 0.2, screenShake * 0.2) : 0);
+    for (let i = 0; i < specimens.length; i++) {
+      const s = specimens[i];
+      const selected = i === selection && state === "play";
+      const trait = activeTrait(s);
+      const accent = traitColors[trait];
+      const speed = Math.hypot(s.vx, s.vy);
+      const bob = Math.sin(s.bounce) * 1.8;
+
+      if (coldSnap.active && speed > 25) {
+        ctx.strokeStyle = "rgba(255,255,255,0.24)";
+        ctx.setLineDash([8, 7]);
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(s.x - s.vx * 0.05, s.y - s.vy * 0.05);
+        ctx.lineTo(s.x - s.vx * 0.2, s.y - s.vy * 0.2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (s.heat > 0.2 || s.heatGlow > 0) {
+        const glow = clamp(s.heat / 4.5 + s.heatGlow * 0.4, 0, 1);
+        ctx.fillStyle = `rgba(255, 151, 84, ${0.08 + glow * 0.17})`;
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y, s.r * (1.2 + glow * 0.4), s.r * (1 + glow * 0.28), 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      if (s.infected > 0) {
+        const pulse = 1 - s.infected / 0.72;
+        ctx.strokeStyle = `rgba(255, 232, 132, ${0.55 * s.infected + 0.14})`;
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r + 8 + pulse * 26, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      if (selected) {
+        ctx.strokeStyle = "rgba(17, 23, 27, 0.9)";
+        ctx.lineWidth = 4;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r + 18 + Math.sin(stateTime * 6) * 2, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.strokeStyle = accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r + 18 + Math.sin(stateTime * 6) * 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      ctx.save();
+      ctx.translate(s.x, s.y + bob);
+      ctx.rotate(s.shellTilt + speed * 0.0018);
+
+      const bodyGrad = ctx.createRadialGradient(-s.r * 0.3, -s.r * 0.4, 3, 0, 0, s.r * 1.5);
+      bodyGrad.addColorStop(0, "#6f706d");
+      bodyGrad.addColorStop(0.65, "#4d4e4c");
+      bodyGrad.addColorStop(1, "#242523");
+      ctx.fillStyle = bodyGrad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, s.r * 1.1, s.r * 0.9, 0.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = `rgba(255,255,255,${0.18 + s.shellCrack * 0.2})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-s.r * 0.2, -s.r * 0.64);
+      ctx.lineTo(s.r * 0.1, -s.r * 0.1);
+      ctx.lineTo(-s.r * 0.05, s.r * 0.55);
+      ctx.moveTo(-s.r * 0.42, -s.r * 0.18);
+      ctx.lineTo(s.r * 0.48, 0.06);
+      ctx.stroke();
+
+      ctx.fillStyle = "#8dd0dd";
+      ctx.beginPath();
+      ctx.ellipse(s.r * 0.86, s.r * 0.04, s.r * 0.52, s.r * 0.26, 0.08, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "#101112";
+      ctx.beginPath();
+      ctx.arc(-s.r * 0.2, -s.r * 0.18, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.strokeStyle = "#171819";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(-s.r * 0.2, s.r * 0.62);
+      ctx.lineTo(-s.r * 0.36, s.r * 0.88);
+      ctx.moveTo(s.r * 0.04, s.r * 0.56);
+      ctx.lineTo(-s.r * 0.08, s.r * 0.82);
+      ctx.stroke();
+
+      ctx.fillStyle = accent;
+      ctx.beginPath();
+      ctx.arc(0, 0, s.r * 0.26, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = "rgba(0,0,0,0.75)";
+      ctx.fillRect(-s.r * 0.76, -s.r * 1.36, s.r * 1.4, 14);
+      ctx.fillStyle = "#f7f0de";
+      ctx.font = "12px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText(trait, -s.r * 0.06, -s.r * 1.12);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawEffects() {
+    ctx.save();
+    for (const ring of rings) {
+      const t = 1 - ring.life / ring.maxLife;
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = ring.color;
+      ctx.lineWidth = ring.line;
+      ctx.beginPath();
+      ctx.arc(ring.x, ring.y, ring.maxR * t, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    for (const ping of heatPings) {
+      const t = ping.age / ping.maxAge;
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = "#ffb36a";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(ping.x, ping.y, 16 + t * 28, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    for (const crack of cracks) {
+      const t = crack.age / crack.maxAge;
+      ctx.globalAlpha = 1 - t;
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(crack.x - 12, crack.y);
+      ctx.lineTo(crack.x + 4, crack.y - 18);
+      ctx.lineTo(crack.x + 16, crack.y + 6);
+      ctx.moveTo(crack.x - 2, crack.y + 6);
+      ctx.lineTo(crack.x + 12, crack.y + 20);
+      ctx.stroke();
+    }
+
+    for (const p of particles) {
+      ctx.globalAlpha = p.life / p.maxLife;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const f of floaters) {
+      ctx.globalAlpha = 1 - f.age;
+      ctx.fillStyle = f.color;
+      ctx.font = `${f.size}px Georgia`;
+      ctx.textAlign = "center";
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.restore();
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(9, 12, 16, 0.84)";
+    roundRect(ctx, 52, 20, 1096, 74, 20, true);
+    roundRect(ctx, 52, 748, 1096, 54, 20, true);
+
+    labelText("SCORE", 78, 48, "#dcecff", 15, 0.16);
+    ctx.fillStyle = "#fff2c5";
+    ctx.font = "28px Georgia";
+    ctx.fillText(String(score).padStart(5, "0"), 78, 79);
+
+    labelText("TIME", 270, 48, "#dcecff", 15, 0.16);
+    ctx.fillStyle = timeLeft <= 15 ? "#ffcb88" : "#eef8ff";
+    ctx.font = "28px Georgia";
+    ctx.fillText(timeLeft.toFixed(1), 270, 79);
+
+    labelText("CHAOS", 410, 48, "#ffd7cf", 15, 0.16);
+    ctx.fillStyle = "rgba(255,255,255,0.1)";
+    roundRect(ctx, 410, 58, 210, 16, 8, true);
+    const chaosGrad = ctx.createLinearGradient(410, 58, 620, 58);
+    chaosGrad.addColorStop(0, "#ffd37f");
+    chaosGrad.addColorStop(0.6, "#ff9a63");
+    chaosGrad.addColorStop(1, "#ff5d63");
+    ctx.fillStyle = chaosGrad;
+    roundRect(ctx, 410, 58, 210 * (chaos / 100), 16, 8, true);
+
+    labelText("COLD SNAP", 648, 48, "#dcecff", 15, 0.16);
+    const ready = coldCooldown <= 0 && !coldSnap.active;
+    ctx.fillStyle = ready ? "#a9f5bf" : "#cfd8dc";
+    ctx.font = "20px Georgia";
+    ctx.fillText(coldSnap.active ? "ACTIVE" : ready ? "READY" : coldCooldown.toFixed(1) + "s", 648, 76);
+
+    labelText("WIND", 818, 48, "#dcecff", 15, 0.16);
+    ctx.fillStyle = "rgba(255,255,255,0.1)";
+    roundRect(ctx, 818, 58, 130, 16, 8, true);
+    const mid = 883;
+    ctx.fillStyle = "#f3fbff";
+    ctx.fillRect(mid - 1, 56, 2, 20);
+    ctx.fillStyle = "#9adfff";
+    const bar = 60 * windVisual;
+    roundRect(ctx, bar >= 0 ? mid : mid + bar, 58, Math.abs(bar), 16, 8, true);
+
+    const s = selectedSpecimen();
+    if (s) {
+      labelText("SELECTED", 972, 48, "#dcecff", 15, 0.16);
+      ctx.fillStyle = traitColors[activeTrait(s)];
+      ctx.font = "20px Georgia";
+      ctx.fillText(activeTrait(s), 972, 76);
+      ctx.fillStyle = "#f5e6c4";
+      ctx.font = "16px Georgia";
+      ctx.fillText("PAIR " + s.pair[0] + " / " + s.pair[1], 1060, 76);
+    }
+
+    labelText("LEFT/RIGHT SELECT   UP HEAT   DOWN FREEZE   A/D WIND   SPACE FLIP", 78, 781, "#fff4de", 15, 0.12);
+    ctx.restore();
+  }
+
+  function drawTitle() {
+    drawBackground();
+    drawSpecimens();
+    drawEffects();
+
+    ctx.save();
+    ctx.fillStyle = "rgba(8, 11, 14, 0.58)";
+    roundRect(ctx, 156, 162, 890, 470, 36, true);
+
+    ctx.fillStyle = "#fff0cd";
+    ctx.font = "74px Georgia";
+    ctx.textAlign = "center";
+    ctx.fillText("Monotreme Fever", W / 2, 250);
+
+    ctx.fillStyle = "#d8edf7";
+    ctx.font = "24px Georgia";
+    ctx.fillText("Heat a fake platypus-stone so it freezes into motion first.", W / 2, 314);
+    ctx.fillText("Then let the dance outbreak hijack the whole herd.", W / 2, 350);
+
+    const lines = [
+      "Sort specimens into the right archive gates on the east wall.",
+      "Hotter stones launch sooner on a cold snap. You do not push directly.",
+      "Infected slides copy motion, create chains, and pay bonus when they score.",
+      "Wrong gates and left-side escapes fill CHAOS. Full CHAOS ends the run."
+    ];
+    ctx.font = "22px Georgia";
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillStyle = i % 2 === 0 ? "#fff7e8" : "#dfeff7";
+      ctx.fillText(lines[i], W / 2, 418 + i * 42);
+    }
+
+    ctx.fillStyle = "rgba(255, 241, 202, 0.14)";
+    roundRect(ctx, 404, 544, 392, 58, 18, true);
+    ctx.fillStyle = "#fff5d4";
+    ctx.font = "28px Georgia";
+    ctx.fillText("Press Enter or Space to Begin", W / 2, 582);
+    ctx.restore();
+  }
+
+  function drawGameOver() {
+    drawBackground();
+    drawSpecimens();
+    drawEffects();
+
+    ctx.save();
+    ctx.fillStyle = "rgba(9, 11, 15, 0.66)";
+    roundRect(ctx, 242, 186, 716, 420, 34, true);
+    ctx.textAlign = "center";
+    ctx.fillStyle = endReason === "chaos" ? "#ffb0a0" : "#eef6ff";
+    ctx.font = "66px Georgia";
+    ctx.fillText(endReason === "chaos" ? "Chaos Overtook The Drawer" : "Archive Round Complete", W / 2, 278);
+    ctx.fillStyle = "#ffe9b3";
+    ctx.font = "32px Georgia";
+    ctx.fillText("Final Score: " + score, W / 2, 360);
+    ctx.fillStyle = "#d9eef8";
+    ctx.fillText("Best Score: " + best, W / 2, 408);
+    ctx.fillStyle = "#fff6df";
+    ctx.font = "26px Georgia";
+    ctx.fillText(endReason === "chaos" ? "Too many mismatches and escapes broke containment." : "The exhibit survived sixty feverish seconds.", W / 2, 470);
+    ctx.fillText("Press Enter or Space for the title screen.", W / 2, 534);
+    ctx.restore();
+  }
+
+  function drawPlay() {
+    drawBackground();
+    drawSpecimens();
+    drawEffects();
+    drawHud();
+  }
+
+  function draw() {
+    if (state === "title") drawTitle();
+    else if (state === "play") drawPlay();
+    else drawGameOver();
+  }
+
+  function labelText(text, x, y, color, size, spacing) {
+    ctx.fillStyle = color;
+    ctx.font = `${size}px Georgia`;
+    ctx.textAlign = "left";
+    if (!spacing) {
+      ctx.fillText(text, x, y);
+      return;
+    }
+    let cursor = x;
+    for (const char of text) {
+      ctx.fillText(char, cursor, y);
+      cursor += ctx.measureText(char).width + spacing * size;
+    }
+  }
+
+  function roundRect(ctx, x, y, w, h, r, fill = false, stroke = false, fillStyleOverride = null) {
+    const rr = Math.min(r, w * 0.5, h * 0.5);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    if (fill) {
+      if (fillStyleOverride) ctx.fillStyle = fillStyleOverride;
+      ctx.fill();
+    }
+    if (stroke) ctx.stroke();
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    update(dt);
+    draw();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", event => {
+    const block = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(event.code);
+    if (block) event.preventDefault();
+    if (!keys.has(event.code)) pressed.add(event.code);
+    keys.add(event.code);
+  });
+
+  window.addEventListener("keyup", event => {
+    keys.delete(event.code);
+  });
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
