@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Split Decision Playa</title>
+<style>
+  :root {
+    --bg: #040507;
+    --ink: #f7f0dd;
+    --muted: rgba(247, 240, 221, 0.72);
+    --panel: rgba(7, 8, 10, 0.72);
+    --line: rgba(255, 246, 220, 0.15);
+    --salt: #efe7cd;
+    --blue: #5cbcff;
+    --red: #ff6a8a;
+    --gold: #ffd87a;
+    --danger: #ff885d;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      radial-gradient(circle at 50% 15%, rgba(255, 240, 200, 0.05), transparent 28%),
+      radial-gradient(circle at 20% 20%, rgba(92, 188, 255, 0.05), transparent 20%),
+      radial-gradient(circle at 80% 25%, rgba(255, 106, 138, 0.05), transparent 18%),
+      linear-gradient(180deg, #030406 0%, #08080c 100%);
+    color: var(--ink);
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1280px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 4;
+    color: var(--ink);
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(4, 5, 7, 0.8);
+    backdrop-filter: blur(8px);
+    letter-spacing: 0.04em;
+    font-size: 14px;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(255, 216, 122, 0.75);
+    color: var(--gold);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background:
+      radial-gradient(circle at 50% 36%, rgba(255, 248, 220, 0.04), transparent 24%),
+      linear-gradient(180deg, rgba(5, 6, 8, 0.98), rgba(2, 2, 4, 1));
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.5),
+      inset 0 0 140px rgba(255, 245, 210, 0.03);
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    font-size: 13px;
+    color: var(--muted);
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; line-height: 1.5; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="840" aria-label="Split Decision Playa"></canvas>
+      <div class="note">Arrow keys move. Z places or removes BLUE beacons. X places or removes RED beacons. Space cuts an undecided stone. Shift triggers THAW WIND.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const cx = W * 0.5;
+  const cy = H * 0.54;
+  const playa = { cx, cy, rx: 455, ry: 275 };
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const angleTo = (ax, ay, bx, by) => Math.atan2(by - ay, bx - ax);
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const sign = v => (v < 0 ? -1 : 1);
+
+  function vecFromAngle(angle, mag = 1) {
+    return { x: Math.cos(angle) * mag, y: Math.sin(angle) * mag };
+  }
+
+  function length(x, y) {
+    return Math.hypot(x, y);
+  }
+
+  function normalize(x, y) {
+    const len = Math.hypot(x, y) || 1;
+    return { x: x / len, y: y / len };
+  }
+
+  function pointInPlaya(x, y, margin = 0) {
+    const dx = (x - playa.cx) / (playa.rx + margin);
+    const dy = (y - playa.cy) / (playa.ry + margin);
+    return dx * dx + dy * dy <= 1;
+  }
+
+  function pointToSegmentDistance(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const len2 = dx * dx + dy * dy || 1;
+    const t = clamp(((px - x1) * dx + (py - y1) * dy) / len2, 0, 1);
+    const sx = x1 + dx * t;
+    const sy = y1 + dy * t;
+    return { distance: Math.hypot(px - sx, py - sy), t, x: sx, y: sy };
+  }
+
+  const cursor = { x: cx, y: cy, r: 15, speed: 420, glow: 0 };
+  const state = {
+    screen: "title",
+    worldTime: 0,
+    timeLeft: 60,
+    score: 0,
+    best: 0,
+    paradoxLoad: 0,
+    thawTimer: 0,
+    thawCooldown: 0,
+    message: "",
+    messageTimer: 0,
+    finalReason: "",
+    spawnTimer: 0,
+    nextStoneId: 1,
+    nextPairId: 1,
+    highlightedStoneId: 0,
+    windScoreCount: 0,
+    comboTextTimer: 0,
+    comboLevel: 1,
+    shake: 0
+  };
+
+  const beacons = { blue: [], red: [] };
+  const stones = [];
+  const trails = [];
+  const particles = [];
+  const popups = [];
+  const obstacles = [];
+  const pairResults = new Map();
+
+  const shrineDefs = [
+    { id: "west", axis: "horizontal", color: "blue", phase: 0.1 },
+    { id: "east", axis: "horizontal", color: "red", phase: 0.1 },
+    { id: "north", axis: "vertical", color: "blue", phase: 1.9 },
+    { id: "south", axis: "vertical", color: "red", phase: 1.9 }
+  ];
+
+  function difficulty() {
+    return clamp((60 - state.timeLeft) / 60, 0, 1);
+  }
+
+  function thawStrength() {
+    return state.timeLeft <= 15 ? 1.35 : 1 + difficulty() * 0.35;
+  }
+
+  function getShrines() {
+    const driftA = Math.sin(state.worldTime * 0.48 + shrineDefs[0].phase) * playa.ry * (0.33 + difficulty() * 0.14);
+    const driftB = Math.sin(state.worldTime * 0.54 + shrineDefs[2].phase) * playa.rx * (0.32 + difficulty() * 0.12);
+    return [
+      { id: "west", color: "blue", x: playa.cx - playa.rx + 48, y: playa.cy + driftA, r: 28 },
+      { id: "east", color: "red", x: playa.cx + playa.rx - 48, y: playa.cy - driftA, r: 28 },
+      { id: "north", color: "blue", x: playa.cx + driftB, y: playa.cy - playa.ry + 44, r: 28 },
+      { id: "south", color: "red", x: playa.cx - driftB, y: playa.cy + playa.ry - 44, r: 28 }
+    ];
+  }
+
+  function addPopup(text, x, y, color = "#ffd87a", life = 1.1) {
+    popups.push({ text, x, y, color, life, maxLife: life });
+  }
+
+  function addMessage(text, life = 1.3) {
+    state.message = text;
+    state.messageTimer = life;
+  }
+
+  function addParticles(x, y, color, count = 10, speed = 90) {
+    for (let i = 0; i < count; i++) {
+      const a = rand(-Math.PI, Math.PI);
+      const m = rand(speed * 0.25, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * m,
+        vy: Math.sin(a) * m,
+        color,
+        life: rand(0.35, 1.1),
+        maxLife: 1.1,
+        size: rand(1.5, 4)
+      });
+    }
+  }
+
+  function scorePoints(amount, x, y, color, text = null) {
+    state.score += amount;
+    addPopup(text || (amount > 0 ? "+" + amount : String(amount)), x, y, color);
+  }
+
+  function currentComboMultiplier() {
+    if (state.windScoreCount < 2) return 1;
+    return 2 + Math.floor((state.windScoreCount - 2) / 2);
+  }
+
+  function scoreStone(stone, shrineId) {
+    const mult = currentComboMultiplier();
+    const base = 80 * mult;
+    scorePoints(base, stone.x, stone.y - 18, stone.committed === "blue" ? "#7ed0ff" : "#ff98ae");
+    if (stone.trailBonusAwarded || stone.usedTrail) {
+      scorePoints(30 * mult, stone.x + 22, stone.y + 4, "#ffd87a", "+30 RAIL");
+    }
+    state.windScoreCount += 1;
+    state.comboLevel = currentComboMultiplier();
+    state.comboTextTimer = state.windScoreCount >= 3 ? 0.9 : state.comboTextTimer;
+
+    const record = pairResults.get(stone.pairId) || { blue: null, red: null };
+    record[stone.committed] = shrineId;
+    pairResults.set(stone.pairId, record);
+    if (record.blue && record.red && record.blue !== record.red && !record.bonusPaid) {
+      record.bonusPaid = true;
+      scorePoints(60 * mult, stone.x, stone.y - 44, "#ffe8a7", "+" + (60 * mult) + " PAIR");
+    }
+    addParticles(stone.x, stone.y, stone.committed === "blue" ? "#7ed0ff" : "#ff8ea9", 18, 150);
+  }
+
+  function resetRun() {
+    state.worldTime = 0;
+    state.timeLeft = 60;
+    state.score = 0;
+    state.paradoxLoad = 0;
+    state.thawTimer = 0;
+    state.thawCooldown = 0;
+    state.message = "";
+    state.messageTimer = 0;
+    state.finalReason = "";
+    state.spawnTimer = 0.6;
+    state.nextStoneId = 1;
+    state.nextPairId = 1;
+    state.highlightedStoneId = 0;
+    state.windScoreCount = 0;
+    state.comboTextTimer = 0;
+    state.comboLevel = 1;
+    state.shake = 0;
+    cursor.x = cx;
+    cursor.y = cy;
+    cursor.glow = 0;
+    beacons.blue.length = 0;
+    beacons.red.length = 0;
+    stones.length = 0;
+    trails.length = 0;
+    particles.length = 0;
+    popups.length = 0;
+    obstacles.length = 0;
+    pairResults.clear();
+    spawnStone(true);
+    spawnStone(true);
+  }
+
+  function startGame() {
+    resetRun();
+    keys.clear();
+    pressed.clear();
+    state.screen = "play";
+    addMessage("Manufacture hesitation. Spend it as motion.");
+  }
+
+  function endGame(reason) {
+    state.finalReason = reason;
+    state.best = Math.max(state.best, state.score);
+    state.screen = "gameover";
+    addMessage(reason, 2.4);
+  }
+
+  function spawnStone(initial = false) {
+    const angle = rand(-Math.PI, Math.PI);
+    const radius = initial ? rand(0, 70) : rand(30, 110);
+    const x = playa.cx + Math.cos(angle) * radius;
+    const y = playa.cy + Math.sin(angle) * radius * 0.8;
+    stones.push({
+      id: state.nextStoneId++,
+      type: "raw",
+      committed: null,
+      pairId: 0,
+      x,
+      y,
+      vx: 0,
+      vy: 0,
+      r: 17,
+      lean: 0,
+      decision: 0,
+      undecided: false,
+      vibration: rand(0, Math.PI * 2),
+      highlight: 0,
+      spawnFlash: 1,
+      usedTrail: false,
+      trailBonusAwarded: false,
+      pendingSplit: false,
+      splitKick: 0
+    });
+  }
+
+  function spawnObstacle() {
+    let tries = 0;
+    while (tries < 20) {
+      tries += 1;
+      const angle = rand(-Math.PI, Math.PI);
+      const radius = rand(120, 260);
+      const x = playa.cx + Math.cos(angle) * radius;
+      const y = playa.cy + Math.sin(angle) * radius * 0.72;
+      if (dist(x, y, cursor.x, cursor.y) < 120) continue;
+      if (!pointInPlaya(x, y, -30)) continue;
+      obstacles.push({ x, y, r: rand(18, 28), pulse: rand(0, Math.PI * 2) });
+      return;
+    }
+  }
+
+  function nearestBeacon(color, x, y) {
+    const list = beacons[color];
+    let best = null;
+    let bestD = Infinity;
+    for (const beacon of list) {
+      const d = dist(x, y, beacon.x, beacon.y);
+      if (d < bestD) {
+        bestD = d;
+        best = beacon;
+      }
+    }
+    return best ? { beacon: best, distance: bestD } : null;
+  }
+
+  function beaconStrength(color, x, y) {
+    const near = nearestBeacon(color, x, y);
+    if (!near) return { strength: 0, beacon: null };
+    return { strength: 22000 / (near.distance * near.distance + 1200), beacon: near.beacon };
+  }
+
+  function evaluateStone(stone) {
+    const blue = beaconStrength("blue", stone.x, stone.y);
+    const red = beaconStrength("red", stone.x, stone.y);
+    const maxS = Math.max(blue.strength, red.strength, 0.0001);
+    const ratio = Math.abs(blue.strength - red.strength) / maxS;
+    const grace = lerp(0.28, 0.12, difficulty());
+    stone.undecided = blue.strength > 0 && red.strength > 0 && ratio < grace;
+    stone.decision = stone.undecided ? 0 : (blue.strength >= red.strength ? 1 : -1);
+    stone.lean = lerp(stone.lean, stone.decision, 0.12);
+    stone.blueTarget = blue.beacon;
+    stone.redTarget = red.beacon;
+  }
+
+  function toggleBeacon(color) {
+    const list = beacons[color];
+    let hitIndex = -1;
+    for (let i = 0; i < list.length; i++) {
+      if (dist(cursor.x, cursor.y, list[i].x, list[i].y) < 26) {
+        hitIndex = i;
+        break;
+      }
+    }
+    if (hitIndex >= 0) {
+      const removed = list.splice(hitIndex, 1)[0];
+      addParticles(removed.x, removed.y, color === "blue" ? "#68c7ff" : "#ff7896", 12, 80);
+      addMessage((color === "blue" ? "Blue" : "Red") + " beacon removed.", 0.8);
+      return;
+    }
+    list.push({ x: cursor.x, y: cursor.y, life: 0, pulse: rand(0, Math.PI * 2) });
+    if (list.length > 4) list.shift();
+    addParticles(cursor.x, cursor.y, color === "blue" ? "#68c7ff" : "#ff7896", 16, 95);
+    addMessage((color === "blue" ? "Blue" : "Red") + " beacon planted.", 0.8);
+  }
+
+  function cutHighlightedStone() {
+    const stone = stones.find(s => s.id === state.highlightedStoneId && s.type === "raw" && s.undecided);
+    if (!stone) {
+      addMessage("Cut only works on a stalled stone.", 0.9);
+      return;
+    }
+    const pairId = state.nextPairId++;
+    const twins = [
+      {
+        id: state.nextStoneId++,
+        type: "twin",
+        committed: "blue",
+        pairId,
+        x: stone.x,
+        y: stone.y,
+        vx: 0,
+        vy: 0,
+        r: 14,
+        lean: 1,
+        decision: 1,
+        undecided: false,
+        vibration: rand(0, Math.PI * 2),
+        highlight: 0,
+        spawnFlash: 1,
+        usedTrail: false,
+        trailBonusAwarded: false,
+        pendingSplit: true,
+        splitKick: 1
+      },
+      {
+        id: state.nextStoneId++,
+        type: "twin",
+        committed: "red",
+        pairId,
+        x: stone.x,
+        y: stone.y,
+        vx: 0,
+        vy: 0,
+        r: 14,
+        lean: -1,
+        decision: -1,
+        undecided: false,
+        vibration: rand(0, Math.PI * 2),
+        highlight: 0,
+        spawnFlash: 1,
+        usedTrail: false,
+        trailBonusAwarded: false,
+        pendingSplit: true,
+        splitKick: -1
+      }
+    ];
+    const idx = stones.indexOf(stone);
+    stones.splice(idx, 1, ...twins);
+    pairResults.set(pairId, { blue: null, red: null, bonusPaid: false });
+    state.paradoxLoad = clamp(state.paradoxLoad + 0.07, 0, 1);
+    addParticles(stone.x, stone.y, "#ffe8ae", 24, 130);
+    addPopup("PARADOX CUT", stone.x, stone.y - 24, "#ffe8ae", 1.25);
+  }
+
+  function triggerThaw() {
+    if (state.thawTimer > 0 || state.thawCooldown > 0) {
+      addMessage("Wind is not ready.", 0.7);
+      return;
+    }
+    state.thawTimer = state.timeLeft <= 15 ? 1.25 : lerp(2.45, 1.7, difficulty());
+    state.thawCooldown = state.timeLeft <= 15 ? 1.2 : 2.5;
+    state.windScoreCount = 0;
+    state.comboLevel = 1;
+    state.comboTextTimer = 0;
+    state.shake = 0.65;
+    for (const stone of stones) {
+      if (stone.type === "twin") stone.pendingSplit = false;
+    }
+    addMessage("THAW WIND", 0.9);
+  }
+
+  function handlePlayInput() {
+    if (pressed.has("KeyZ")) toggleBeacon("blue");
+    if (pressed.has("KeyX")) toggleBeacon("red");
+    if (pressed.has("Space")) cutHighlightedStone();
+    if (pressed.has("ShiftLeft") || pressed.has("ShiftRight")) triggerThaw();
+  }
+
+  function rawStoneDirection(stone) {
+    evaluateStone(stone);
+    if (stone.undecided) return { x: 0, y: 0 };
+    const target = stone.decision > 0 ? stone.blueTarget : stone.redTarget;
+    if (!target) return { x: stone.decision, y: 0 };
+    const n = normalize(target.x - stone.x, target.y - stone.y);
+    return { x: n.x, y: n.y };
+  }
+
+  function committedDirection(stone, shrines) {
+    const towardBeacon = nearestBeacon(stone.committed, stone.x, stone.y);
+    const matchingShrines = shrines.filter(s => s.color === stone.committed);
+    let bestShrine = matchingShrines[0];
+    let bestShrineD = dist(stone.x, stone.y, bestShrine.x, bestShrine.y);
+    for (let i = 1; i < matchingShrines.length; i++) {
+      const d = dist(stone.x, stone.y, matchingShrines[i].x, matchingShrines[i].y);
+      if (d < bestShrineD) {
+        bestShrineD = d;
+        bestShrine = matchingShrines[i];
+      }
+    }
+    const beaconBias = towardBeacon ? clamp(1 - towardBeacon.distance / 320, 0.12, 0.85) : 0;
+    const shrineVec = normalize(bestShrine.x - stone.x, bestShrine.y - stone.y);
+    let dir = { x: shrineVec.x, y: shrineVec.y };
+    if (towardBeacon) {
+      const beaconVec = normalize(towardBeacon.beacon.x - stone.x, towardBeacon.beacon.y - stone.y);
+      dir = normalize(
+        beaconVec.x * (0.4 + beaconBias * 0.55) + shrineVec.x * (1 - beaconBias * 0.45),
+        beaconVec.y * (0.4 + beaconBias * 0.55) + shrineVec.y * (1 - beaconBias * 0.45)
+      );
+    }
+    return dir;
+  }
+
+  function applyTrailAssist(stone, dir) {
+    if (trails.length === 0) return { dir, boost: 1 };
+    let best = null;
+    let bestD = 18;
+    for (const trail of trails) {
+      if (trail.age < 0.6 || trail.age > 4.8) continue;
+      const hit = pointToSegmentDistance(stone.x, stone.y, trail.x1, trail.y1, trail.x2, trail.y2);
+      if (hit.distance < bestD) {
+        bestD = hit.distance;
+        best = trail;
+      }
+    }
+    if (!best) return { dir, boost: 1 };
+    const trailDir = { x: Math.cos(best.angle), y: Math.sin(best.angle) };
+    const align = normalize(dir.x * 0.35 + trailDir.x * 0.65, dir.y * 0.35 + trailDir.y * 0.65);
+    stone.usedTrail = true;
+    stone.trailBonusAwarded = true;
+    return { dir: align, boost: 1.32 };
+  }
+
+  function steerStone(stone, dt, shrines) {
+    const oldX = stone.x;
+    const oldY = stone.y;
+    let dir = stone.type === "raw" ? rawStoneDirection(stone) : committedDirection(stone, shrines);
+    let speed = stone.type === "raw" ? 210 : 320;
+
+    if (stone.pendingSplit) {
+      dir = { x: dir.x + stone.splitKick * 0.22, y: dir.y - stone.splitKick * 0.06 };
+      speed *= 1.15;
+    }
+
+    const trailAssist = applyTrailAssist(stone, normalize(dir.x, dir.y));
+    dir = trailAssist.dir;
+    speed *= trailAssist.boost * thawStrength();
+
+    const drift = vecFromAngle(state.worldTime * 2.4 + stone.id, 22 * (stone.type === "twin" ? 1.2 : 0.75));
+    stone.vx = lerp(stone.vx, dir.x * speed + drift.x, 0.16);
+    stone.vy = lerp(stone.vy, dir.y * speed + drift.y, 0.16);
+    stone.x += stone.vx * dt;
+    stone.y += stone.vy * dt;
+
+    if (dist(oldX, oldY, stone.x, stone.y) > 3) {
+      trails.push({
+        x1: oldX,
+        y1: oldY,
+        x2: stone.x,
+        y2: stone.y,
+        color: stone.committed || (stone.decision > 0 ? "blue" : stone.decision < 0 ? "red" : "neutral"),
+        age: 0,
+        angle: Math.atan2(stone.y - oldY, stone.x - oldX)
+      });
+      if (trails.length > 260) trails.shift();
+    }
+  }
+
+  function keepCursorInBounds() {
+    const dx = cursor.x - playa.cx;
+    const dy = cursor.y - playa.cy;
+    const t = dx * dx / (playa.rx - 16) ** 2 + dy * dy / (playa.ry - 16) ** 2;
+    if (t > 1) {
+      const ang = Math.atan2(dy, dx);
+      cursor.x = playa.cx + Math.cos(ang) * (playa.rx - 16);
+      cursor.y = playa.cy + Math.sin(ang) * (playa.ry - 16);
+    }
+  }
+
+  function updateCursor(dt) {
+    let mx = 0;
+    let my = 0;
+    if (keys.has("ArrowLeft")) mx -= 1;
+    if (keys.has("ArrowRight")) mx += 1;
+    if (keys.has("ArrowUp")) my -= 1;
+    if (keys.has("ArrowDown")) my += 1;
+    if (mx || my) {
+      const n = normalize(mx, my);
+      cursor.x += n.x * cursor.speed * dt;
+      cursor.y += n.y * cursor.speed * dt;
+      cursor.glow = 1;
+    }
+    cursor.glow = Math.max(0, cursor.glow - dt * 1.6);
+    keepCursorInBounds();
+  }
+
+  function handleCollisions() {
+    for (const stone of stones) {
+      for (const rock of obstacles) {
+        const d = dist(stone.x, stone.y, rock.x, rock.y);
+        const min = stone.r + rock.r + 2;
+        if (d < min) {
+          const n = normalize(stone.x - rock.x, stone.y - rock.y);
+          stone.x = rock.x + n.x * min;
+          stone.y = rock.y + n.y * min;
+          const dot = stone.vx * n.x + stone.vy * n.y;
+          stone.vx -= dot * 1.6 * n.x;
+          stone.vy -= dot * 1.6 * n.y;
+          state.paradoxLoad = clamp(state.paradoxLoad + 0.012, 0, 1);
+        }
+      }
+    }
+
+    for (let i = stones.length - 1; i >= 0; i--) {
+      for (let j = i - 1; j >= 0; j--) {
+        const a = stones[i];
+        const b = stones[j];
+        const d = dist(a.x, a.y, b.x, b.y);
+        const min = a.r + b.r;
+        if (d >= min || d === 0) continue;
+        const n = normalize(a.x - b.x, a.y - b.y);
+        const overlap = min - d;
+        a.x += n.x * overlap * 0.5;
+        a.y += n.y * overlap * 0.5;
+        b.x -= n.x * overlap * 0.5;
+        b.y -= n.y * overlap * 0.5;
+        const rel = Math.hypot(a.vx - b.vx, a.vy - b.vy);
+
+        if (a.type === "twin" && b.type === "twin" && a.pairId === b.pairId && rel > 150) {
+          const midX = (a.x + b.x) * 0.5;
+          const midY = (a.y + b.y) * 0.5;
+          stones.splice(i, 1);
+          stones.splice(j, 1);
+          obstacles.push({ x: midX, y: midY, r: 20, pulse: rand(0, Math.PI * 2) });
+          scorePoints(-60, midX, midY - 20, "#ff9b75", "-60 MERGE");
+          addParticles(midX, midY, "#ffd5a8", 24, 140);
+          state.paradoxLoad = clamp(state.paradoxLoad + 0.18, 0, 1);
+          return;
+        }
+
+        const bounce = 0.68;
+        a.vx += n.x * rel * bounce * 0.5;
+        a.vy += n.y * rel * bounce * 0.5;
+        b.vx -= n.x * rel * bounce * 0.5;
+        b.vy -= n.y * rel * bounce * 0.5;
+        if (rel > 110) state.paradoxLoad = clamp(state.paradoxLoad + 0.028, 0, 1);
+      }
+    }
+  }
+
+  function resolveShrines(shrines) {
+    for (let i = stones.length - 1; i >= 0; i--) {
+      const stone = stones[i];
+      if (stone.type !== "twin") continue;
+      for (const shrine of shrines) {
+        if (dist(stone.x, stone.y, shrine.x, shrine.y) > shrine.r + stone.r + 4) continue;
+        if (shrine.color === stone.committed) {
+          scoreStone(stone, shrine.id);
+        } else {
+          scorePoints(-40, stone.x, stone.y - 12, "#ff8f75", "-40 WRONG");
+          state.paradoxLoad = clamp(state.paradoxLoad + 0.05, 0, 1);
+          addParticles(stone.x, stone.y, "#ff9d8a", 16, 110);
+        }
+        stones.splice(i, 1);
+        break;
+      }
+    }
+  }
+
+  function removeDriftedStones() {
+    for (let i = stones.length - 1; i >= 0; i--) {
+      const stone = stones[i];
+      if (pointInPlaya(stone.x, stone.y, 35)) continue;
+      stones.splice(i, 1);
+      if (stone.type === "twin") {
+        scorePoints(-75, stone.x, stone.y, "#ff9b75", "-75 LOST");
+        state.paradoxLoad = clamp(state.paradoxLoad + 0.11, 0, 1);
+      } else {
+        state.paradoxLoad = clamp(state.paradoxLoad + 0.04, 0, 1);
+      }
+      addParticles(stone.x, stone.y, "#f8ead5", 12, 100);
+    }
+  }
+
+  function updatePlay(dt) {
+    state.worldTime += dt;
+    state.timeLeft = Math.max(0, state.timeLeft - dt);
+    if (state.messageTimer > 0) state.messageTimer -= dt;
+    if (state.comboTextTimer > 0) state.comboTextTimer -= dt;
+    state.thawCooldown = Math.max(0, state.thawCooldown - dt);
+    state.shake = Math.max(0, state.shake - dt * 1.4);
+
+    updateCursor(dt);
+    handlePlayInput();
+
+    const shrines = getShrines();
+    let undecidedTarget = null;
+    let bestTargetD = 60;
+
+    for (const beacon of beacons.blue) beacon.life += dt;
+    for (const beacon of beacons.red) beacon.life += dt;
+
+    for (const stone of stones) {
+      stone.spawnFlash = Math.max(0, stone.spawnFlash - dt * 1.6);
+      stone.vibration += dt * 8;
+      stone.highlight = Math.max(0, stone.highlight - dt * 2.4);
+      if (stone.type === "raw") {
+        evaluateStone(stone);
+        const d = dist(stone.x, stone.y, cursor.x, cursor.y);
+        if (stone.undecided && d < bestTargetD) {
+          bestTargetD = d;
+          undecidedTarget = stone;
+        }
+      }
+    }
+    state.highlightedStoneId = undecidedTarget ? undecidedTarget.id : 0;
+    if (undecidedTarget) undecidedTarget.highlight = 1;
+
+    if (state.thawTimer > 0) {
+      state.thawTimer -= dt;
+      for (const stone of stones) steerStone(stone, dt, shrines);
+      handleCollisions();
+      resolveShrines(shrines);
+      removeDriftedStones();
+      if (state.thawTimer <= 0) {
+        for (const stone of stones) {
+          stone.vx = 0;
+          stone.vy = 0;
+        }
+      }
+    }
+
+    for (const trail of trails) trail.age += dt;
+    for (let i = trails.length - 1; i >= 0; i--) {
+      if (trails[i].age > 6.2) trails.splice(i, 1);
+    }
+
+    for (const p of particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.97;
+      p.vy *= 0.97;
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    for (const popup of popups) {
+      popup.life -= dt;
+      popup.y -= dt * 36;
+    }
+    for (let i = popups.length - 1; i >= 0; i--) {
+      if (popups[i].life <= 0) popups.splice(i, 1);
+    }
+
+    const rawCount = stones.filter(s => s.type === "raw").length;
+    const cap = state.timeLeft > 40 ? 2 : state.timeLeft > 20 ? 4 : 5;
+    state.spawnTimer -= dt;
+    if (state.spawnTimer <= 0 && rawCount < cap) {
+      spawnStone();
+      state.spawnTimer = state.timeLeft > 45 ? 4.8 : state.timeLeft > 25 ? 3.5 : state.timeLeft > 15 ? 2.7 : 2.2;
+    }
+
+    const desiredObstacles = state.timeLeft > 30 ? 0 : state.timeLeft > 18 ? 1 : state.timeLeft > 8 ? 2 : 3;
+    if (obstacles.length < desiredObstacles && Math.random() < dt * 0.3) spawnObstacle();
+
+    const twinCount = stones.filter(s => s.type === "twin").length;
+    state.paradoxLoad = clamp(
+      state.paradoxLoad + twinCount * dt * lerp(0.0025, 0.006, difficulty()) - dt * 0.014,
+      0,
+      1
+    );
+
+    if (state.timeLeft <= 0) {
+      endGame("The weather window closed.");
+    } else if (state.paradoxLoad >= 1) {
+      endGame("Paradox load saturated the playa.");
+    }
+  }
+
+  function drawBackground(shrines) {
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#030406";
+    ctx.fillRect(0, 0, W, H);
+
+    const sky = ctx.createRadialGradient(cx, 120, 20, cx, 120, 520);
+    sky.addColorStop(0, "rgba(255,243,207,0.08)");
+    sky.addColorStop(0.55, "rgba(255,243,207,0.02)");
+    sky.addColorStop(1, "rgba(0,0,0,0)");
+    ctx.fillStyle = sky;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(playa.cx, playa.cy, playa.rx, playa.ry, 0, 0, Math.PI * 2);
+    const salt = ctx.createRadialGradient(playa.cx, playa.cy - 20, 20, playa.cx, playa.cy, playa.rx);
+    salt.addColorStop(0, "#fbf5de");
+    salt.addColorStop(0.55, "#e9dec2");
+    salt.addColorStop(1, "#bba887");
+    ctx.fillStyle = salt;
+    ctx.fill();
+    ctx.clip();
+
+    for (let i = 0; i < 34; i++) {
+      const a = i / 34 * Math.PI * 2 + Math.sin(state.worldTime * 0.3 + i) * 0.08;
+      const inner = 60 + (i % 6) * 18;
+      const outer = playa.rx - 18 - (i % 4) * 20;
+      ctx.strokeStyle = "rgba(93,74,49,0.14)";
+      ctx.lineWidth = 1 + (i % 3) * 0.45;
+      ctx.beginPath();
+      ctx.moveTo(playa.cx + Math.cos(a) * inner, playa.cy + Math.sin(a) * inner * 0.65);
+      ctx.lineTo(playa.cx + Math.cos(a + Math.sin(i) * 0.05) * outer, playa.cy + Math.sin(a + Math.cos(i) * 0.04) * outer * 0.65);
+      ctx.stroke();
+    }
+
+    if (state.thawTimer > 0) {
+      const alpha = 0.14 + state.thawTimer * 0.08;
+      const gloss = ctx.createLinearGradient(playa.cx - playa.rx, playa.cy - playa.ry, playa.cx + playa.rx, playa.cy + playa.ry);
+      gloss.addColorStop(0, "rgba(255,255,255," + alpha * 0.45 + ")");
+      gloss.addColorStop(0.4, "rgba(150,215,255," + alpha + ")");
+      gloss.addColorStop(0.7, "rgba(255,192,208," + alpha * 0.7 + ")");
+      gloss.addColorStop(1, "rgba(255,255,255," + alpha * 0.2 + ")");
+      ctx.fillStyle = gloss;
+      ctx.fillRect(playa.cx - playa.rx, playa.cy - playa.ry, playa.rx * 2, playa.ry * 2);
+    }
+
+    for (const trail of trails) {
+      const fresh = trail.age < 1.1;
+      const alpha = fresh ? 0.26 : clamp(0.18 - (trail.age - 1.1) * 0.026, 0.02, 0.18);
+      ctx.strokeStyle = trail.color === "blue"
+        ? "rgba(92,188,255," + alpha + ")"
+        : trail.color === "red"
+        ? "rgba(255,106,138," + alpha + ")"
+        : "rgba(255,245,224," + alpha * 0.75 + ")";
+      ctx.lineWidth = fresh ? 5 : 3;
+      ctx.beginPath();
+      ctx.moveTo(trail.x1, trail.y1);
+      ctx.lineTo(trail.x2, trail.y2);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(255,245,220,0.16)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.ellipse(playa.cx, playa.cy, playa.rx, playa.ry, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    for (const shrine of shrines) {
+      const hue = shrine.color === "blue" ? [92, 188, 255] : [255, 106, 138];
+      const halo = ctx.createRadialGradient(shrine.x, shrine.y, 4, shrine.x, shrine.y, shrine.r * 2.4);
+      halo.addColorStop(0, "rgba(" + hue[0] + "," + hue[1] + "," + hue[2] + ",0.48)");
+      halo.addColorStop(0.45, "rgba(" + hue[0] + "," + hue[1] + "," + hue[2] + ",0.22)");
+      halo.addColorStop(1, "rgba(" + hue[0] + "," + hue[1] + "," + hue[2] + ",0)");
+      ctx.fillStyle = halo;
+      ctx.beginPath();
+      ctx.arc(shrine.x, shrine.y, shrine.r * 2.4, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(" + hue[0] + "," + hue[1] + "," + hue[2] + ",0.95)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(shrine.x, shrine.y, shrine.r, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(shrine.x, shrine.y, shrine.r + 10 + Math.sin(state.worldTime * 2 + shrine.x * 0.01) * 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function drawObstacles() {
+    for (const rock of obstacles) {
+      const p = Math.sin(state.worldTime * 1.8 + rock.pulse) * 0.5 + 0.5;
+      ctx.fillStyle = "rgba(84,76,68,0.96)";
+      ctx.beginPath();
+      ctx.arc(rock.x, rock.y, rock.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(255,236,210," + (0.08 + p * 0.08) + ")";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(rock.x, rock.y, rock.r + 5 + p * 3, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function drawBeacons() {
+    for (const color of ["blue", "red"]) {
+      for (const beacon of beacons[color]) {
+        const pulse = Math.sin(state.worldTime * 2.8 + beacon.life * 2.1) * 0.5 + 0.5;
+        ctx.fillStyle = color === "blue" ? "#5cbcff" : "#ff6a8a";
+        ctx.beginPath();
+        ctx.arc(beacon.x, beacon.y, 8, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = color === "blue"
+          ? "rgba(92,188,255," + (0.3 + pulse * 0.35) + ")"
+          : "rgba(255,106,138," + (0.3 + pulse * 0.35) + ")";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(beacon.x, beacon.y, 18 + pulse * 5, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  function drawStones() {
+    for (const stone of stones) {
+      const jitter = stone.undecided ? Math.sin(stone.vibration * 8) * 2.5 : 0;
+      const x = stone.x + jitter;
+      const y = stone.y + Math.cos(stone.vibration * 6) * (stone.undecided ? 1.6 : 0);
+      const glow = stone.committed === "blue"
+        ? "rgba(92,188,255,0.35)"
+        : stone.committed === "red"
+        ? "rgba(255,106,138,0.35)"
+        : "rgba(255,246,221,0.24)";
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(x, y, stone.r + 8 + stone.spawnFlash * 10, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = stone.type === "raw" ? "#554e47" : stone.committed === "blue" ? "#a8defc" : "#ffc0cb";
+      ctx.beginPath();
+      ctx.ellipse(x, y, stone.r, stone.r * 0.88, stone.lean * 0.16, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = stone.undecided ? "#ffe8a5" : "rgba(0,0,0,0.25)";
+      ctx.lineWidth = stone.undecided ? 2.2 : 1;
+      ctx.stroke();
+
+      if (stone.type === "raw") {
+        ctx.strokeStyle = stone.undecided
+          ? "rgba(255,216,122,0.95)"
+          : stone.decision > 0
+          ? "rgba(92,188,255,0.8)"
+          : "rgba(255,106,138,0.8)";
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x - 9, y + 10);
+        ctx.lineTo(x + stone.lean * 11, y - 10);
+        ctx.stroke();
+      }
+
+      if (stone.highlight > 0) {
+        ctx.strokeStyle = "rgba(255,232,165," + (0.45 + stone.highlight * 0.45) + ")";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(x, y, stone.r + 12 + Math.sin(state.worldTime * 7) * 2, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+
+      if (stone.pendingSplit) {
+        ctx.strokeStyle = "rgba(255,255,255,0.62)";
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.arc(x, y, stone.r + 6, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
+    }
+  }
+
+  function drawCursor() {
+    ctx.save();
+    ctx.translate(cursor.x, cursor.y);
+    ctx.strokeStyle = "rgba(255,245,220,0.96)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, cursor.r + cursor.glow * 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-12, 0);
+    ctx.lineTo(12, 0);
+    ctx.moveTo(0, -12);
+    ctx.lineTo(0, 12);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const alpha = clamp(p.life / p.maxLife, 0, 1);
+      ctx.fillStyle = p.color.replace(")", "," + alpha + ")").replace("rgb", "rgba");
+      if (!p.color.startsWith("rgb")) ctx.fillStyle = p.color;
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawPopups() {
+    ctx.font = "bold 18px Trebuchet MS";
+    ctx.textAlign = "center";
+    for (const popup of popups) {
+      ctx.globalAlpha = clamp(popup.life / popup.maxLife, 0, 1);
+      ctx.fillStyle = popup.color;
+      ctx.fillText(popup.text, popup.x, popup.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHud() {
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(7,8,10,0.68)";
+    ctx.fillRect(28, 26, 352, 112);
+    ctx.strokeStyle = "rgba(255,255,255,0.09)";
+    ctx.strokeRect(28, 26, 352, 112);
+
+    ctx.fillStyle = "#f7f0dd";
+    ctx.font = "700 24px Georgia";
+    ctx.fillText("Split Decision Playa", 46, 58);
+    ctx.font = "15px Trebuchet MS";
+    ctx.fillStyle = "rgba(247,240,221,0.8)";
+    ctx.fillText("Score " + state.score, 46, 88);
+    ctx.fillText("Time " + state.timeLeft.toFixed(1), 148, 88);
+    ctx.fillText("Twins " + stones.filter(s => s.type === "twin").length, 240, 88);
+
+    ctx.fillStyle = "rgba(247,240,221,0.7)";
+    ctx.fillText("Blue " + beacons.blue.length + "/4", 46, 114);
+    ctx.fillText("Red " + beacons.red.length + "/4", 126, 114);
+    ctx.fillText(state.thawTimer > 0 ? "THAW LIVE" : state.thawCooldown > 0 ? "Wind cooling" : "Wind ready", 206, 114);
+
+    ctx.fillStyle = "rgba(7,8,10,0.68)";
+    ctx.fillRect(W - 332, 26, 286, 78);
+    ctx.strokeStyle = "rgba(255,255,255,0.09)";
+    ctx.strokeRect(W - 332, 26, 286, 78);
+    ctx.fillStyle = "#f7f0dd";
+    ctx.font = "700 16px Trebuchet MS";
+    ctx.fillText("PARADOX LOAD", W - 308, 52);
+    ctx.fillStyle = "rgba(255,255,255,0.12)";
+    ctx.fillRect(W - 308, 64, 236, 18);
+    const loadColor = state.paradoxLoad < 0.6 ? "#ffd87a" : state.paradoxLoad < 0.85 ? "#ff9c61" : "#ff5f6f";
+    ctx.fillStyle = loadColor;
+    ctx.fillRect(W - 308, 64, 236 * state.paradoxLoad, 18);
+    ctx.fillStyle = "rgba(247,240,221,0.72)";
+    ctx.font = "14px Trebuchet MS";
+    ctx.fillText(Math.round(state.paradoxLoad * 100) + "%", W - 64, 78);
+
+    if (state.messageTimer > 0 && state.message) {
+      ctx.textAlign = "center";
+      ctx.font = "700 24px Georgia";
+      ctx.fillStyle = "rgba(255,232,174," + clamp(state.messageTimer, 0, 1) + ")";
+      ctx.fillText(state.message, cx, 96);
+    }
+
+    if (state.comboTextTimer > 0) {
+      ctx.textAlign = "center";
+      ctx.font = "700 28px Georgia";
+      ctx.fillStyle = "rgba(255,216,122," + clamp(state.comboTextTimer * 1.2, 0, 1) + ")";
+      ctx.fillText("COMBO x" + state.comboLevel, cx, 138);
+    }
+
+    ctx.textAlign = "center";
+    ctx.font = "14px Trebuchet MS";
+    ctx.fillStyle = "rgba(247,240,221,0.62)";
+    ctx.fillText("Create a tie. Cut the tie. Trigger weather.", cx, H - 26);
+  }
+
+  function drawTitle() {
+    const shrines = getShrines();
+    drawBackground(shrines);
+    drawObstacles();
+    drawBeacons();
+    drawStones();
+    drawCursor();
+
+    ctx.fillStyle = "rgba(0,0,0,0.52)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#f7f0dd";
+    ctx.textAlign = "center";
+    ctx.font = "700 58px Georgia";
+    ctx.fillText("SPLIT DECISION PLAYA", cx, 180);
+    ctx.font = "italic 26px Georgia";
+    ctx.fillStyle = "rgba(247,240,221,0.84)";
+    ctx.fillText("farm hesitation, spend it as motion", cx, 222);
+
+    ctx.fillStyle = "rgba(7,8,10,0.72)";
+    ctx.fillRect(cx - 360, 280, 720, 248);
+    ctx.strokeStyle = "rgba(255,255,255,0.09)";
+    ctx.strokeRect(cx - 360, 280, 720, 248);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#f7f0dd";
+    ctx.font = "700 24px Trebuchet MS";
+    ctx.fillText("How It Works", cx - 320, 322);
+    ctx.font = "18px Trebuchet MS";
+    ctx.fillStyle = "rgba(247,240,221,0.84)";
+    ctx.fillText("Arrow keys: move the reason cursor across the salt.", cx - 320, 362);
+    ctx.fillText("Z and X: plant blue and red beacons to manufacture a perfect tie.", cx - 320, 394);
+    ctx.fillText("Space: cut the highlighted undecided stone into full-value twins.", cx - 320, 426);
+    ctx.fillText("Shift: open a brief thaw window so stones sail, split, and score.", cx - 320, 458);
+    ctx.fillText("Fresh trails become rails. Reuse them for speed and bonus points.", cx - 320, 490);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 26px Georgia";
+    ctx.fillStyle = "#ffe8ae";
+    ctx.fillText("Press Space or Enter to begin", cx, 600);
+  }
+
+  function drawGameOver() {
+    const shrines = getShrines();
+    drawBackground(shrines);
+    drawObstacles();
+    drawBeacons();
+    drawStones();
+    drawPopups();
+
+    ctx.fillStyle = "rgba(0,0,0,0.58)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(7,8,10,0.76)";
+    ctx.fillRect(cx - 300, 210, 600, 360);
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.strokeRect(cx - 300, 210, 600, 360);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f7f0dd";
+    ctx.font = "700 52px Georgia";
+    ctx.fillText("RUN OVER", cx, 286);
+    ctx.font = "italic 24px Georgia";
+    ctx.fillStyle = "rgba(247,240,221,0.82)";
+    ctx.fillText(state.finalReason, cx, 330);
+    ctx.font = "700 42px Georgia";
+    ctx.fillStyle = "#ffe8ae";
+    ctx.fillText("Score " + state.score, cx, 404);
+    ctx.font = "22px Trebuchet MS";
+    ctx.fillStyle = "rgba(247,240,221,0.82)";
+    ctx.fillText("Best " + state.best, cx, 446);
+    ctx.fillText("Paradox load " + Math.round(state.paradoxLoad * 100) + "%", cx, 480);
+    ctx.fillStyle = "rgba(247,240,221,0.68)";
+    ctx.fillText("Press Space or Enter to run it again.", cx, 530);
+  }
+
+  function render() {
+    const shrines = getShrines();
+    const shakeX = state.shake > 0 ? Math.sin(state.worldTime * 28) * state.shake * 7 : 0;
+    const shakeY = state.shake > 0 ? Math.cos(state.worldTime * 24) * state.shake * 5 : 0;
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+
+    if (state.screen === "title") {
+      drawTitle();
+    } else if (state.screen === "play") {
+      drawBackground(shrines);
+      drawObstacles();
+      drawBeacons();
+      drawStones();
+      drawCursor();
+      drawParticles();
+      drawPopups();
+      drawHud();
+    } else if (state.screen === "gameover") {
+      drawGameOver();
+    }
+
+    ctx.restore();
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = clamp((now - last) / 1000, 0, 0.033);
+    last = now;
+
+    if (state.screen === "play") {
+      updatePlay(dt);
+    } else {
+      state.worldTime += dt;
+      if (state.messageTimer > 0) state.messageTimer -= dt;
+      for (const popup of popups) popup.life -= dt;
+      for (let i = popups.length - 1; i >= 0; i--) {
+        if (popups[i].life <= 0) popups.splice(i, 1);
+      }
+    }
+
+    render();
+    pressed.clear();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", event => {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space", "ShiftLeft", "ShiftRight"].includes(event.code)) {
+      event.preventDefault();
+    }
+    if (!keys.has(event.code)) pressed.add(event.code);
+    keys.add(event.code);
+
+    if (state.screen === "title" && (event.code === "Enter" || event.code === "Space")) {
+      startGame();
+    } else if (state.screen === "gameover" && (event.code === "Enter" || event.code === "Space")) {
+      startGame();
+    }
+  });
+
+  window.addEventListener("keyup", event => {
+    keys.delete(event.code);
+  });
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
