@@ -1,0 +1,1226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Heterodyne Drift</title>
+<style>
+  :root {
+    --bg0: #060708;
+    --bg1: #151112;
+    --dust: #8e5c4e;
+    --clay: #5a3029;
+    --salt: #f2e7d1;
+    --ice: #b6efff;
+    --glow: #9de7ff;
+    --amber: #ffca74;
+    --danger: #ff6d5f;
+    --panel: rgba(12, 10, 11, 0.82);
+    --muted: rgba(242, 231, 209, 0.74);
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    color: var(--salt);
+    font-family: Georgia, "Times New Roman", serif;
+    background:
+      radial-gradient(circle at 50% -10%, rgba(182, 239, 255, 0.1), transparent 24%),
+      radial-gradient(circle at 20% 18%, rgba(255, 202, 116, 0.08), transparent 20%),
+      radial-gradient(circle at 82% 22%, rgba(157, 231, 255, 0.08), transparent 22%),
+      linear-gradient(180deg, #050506 0%, #130d0d 48%, #050506 100%);
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    position: relative;
+    width: min(1360px, 100%);
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 4;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(242, 231, 209, 0.16);
+    color: var(--salt);
+    text-decoration: none;
+    background: rgba(13, 11, 11, 0.88);
+    backdrop-filter: blur(8px);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    color: var(--amber);
+    border-color: rgba(255, 202, 116, 0.72);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(242, 231, 209, 0.08);
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.55),
+      inset 0 0 120px rgba(157, 231, 255, 0.05);
+    background:
+      radial-gradient(circle at 50% 20%, rgba(182, 239, 255, 0.05), transparent 24%),
+      linear-gradient(180deg, rgba(49, 28, 26, 0.98), rgba(10, 8, 8, 1));
+  }
+
+  .note {
+    margin-top: 12px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    line-height: 1.5;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="900" aria-label="Heterodyne Drift"></canvas>
+      <div class="note">A / D tune pitch angle, J / L tune volume, Space triggers thaw, R damps fields, Shift fires a short vibrato while drifting. Enter or Space starts and restarts.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const TAU = Math.PI * 2;
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const easeOut = (t) => 1 - Math.pow(1 - t, 3);
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const angNorm = (a) => {
+    while (a > Math.PI) a -= TAU;
+    while (a < -Math.PI) a += TAU;
+    return a;
+  };
+  const segPointDist = (ax, ay, bx, by, px, py) => {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy || 1;
+    const t = clamp(((px - ax) * dx + (py - ay) * dy) / lenSq, 0, 1);
+    const sx = ax + dx * t;
+    const sy = ay + dy * t;
+    return { d: Math.hypot(px - sx, py - sy), t, x: sx, y: sy };
+  };
+  const segIntersection = (a1x, a1y, a2x, a2y, b1x, b1y, b2x, b2y) => {
+    const rX = a2x - a1x;
+    const rY = a2y - a1y;
+    const sX = b2x - b1x;
+    const sY = b2y - b1y;
+    const denom = rX * sY - rY * sX;
+    if (Math.abs(denom) < 0.0001) return null;
+    const u = ((b1x - a1x) * rY - (b1y - a1y) * rX) / denom;
+    const t = ((b1x - a1x) * sY - (b1y - a1y) * sX) / denom;
+    if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+      return {
+        x: a1x + t * rX,
+        y: a1y + t * rY,
+        t,
+        u
+      };
+    }
+    return null;
+  };
+
+  const court = { x: 120, y: 120, w: 1040, h: 650 };
+  const stone = {
+    x: court.x + court.w * 0.22,
+    y: court.y + court.h * 0.58,
+    vx: 0,
+    vy: 0,
+    r: 12,
+    spin: 0,
+    thawTrail: [],
+    thawDistance: 0
+  };
+
+  const game = {
+    state: "title",
+    phase: "TUNE",
+    score: 0,
+    best: Number(localStorage.getItem("heterodyne-drift-best") || 0),
+    timeLeft: 60,
+    crack: 0,
+    crackMax: 100,
+    pitchField: 0,
+    volumeField: 0,
+    tuneClock: 0,
+    autoThawAt: 1.4,
+    thawClock: 0,
+    thawLimit: 1.7,
+    nextWicket: 0,
+    lastTime: 0,
+    duration: 60,
+    message: "",
+    messageTimer: 0,
+    endReason: "The weather instrument fell silent.",
+    bankedThisThaw: false,
+    crossedTrailThisThaw: false,
+    vibratoUsedThisThaw: false,
+    vibratoPulse: 0,
+    vibratoCooldown: 0,
+    wicketsThisThaw: 0,
+    usefulTouchThisThaw: false,
+    thawStartedAt: 0,
+    movingFrostPhase: 0,
+    difficulty: 0,
+    ambience: 0
+  };
+
+  let particles = [];
+  let trails = [];
+  let meltPatches = [];
+  let roughPatches = [];
+  let bankWalls = [];
+  let wickets = [];
+
+  function makeWicket(id, x, y, angle, gap, length) {
+    const nx = Math.cos(angle);
+    const ny = Math.sin(angle);
+    const px = -ny;
+    const py = nx;
+    return {
+      id,
+      x,
+      y,
+      angle,
+      gap,
+      length,
+      clearScale: 1,
+      lastScoredAt: -999,
+      lastContactAt: -999,
+      flash: 0,
+      wrongFlash: 0,
+      posts: [
+        { x: x + px * gap * 0.5, y: y + py * gap * 0.5 },
+        { x: x - px * gap * 0.5, y: y - py * gap * 0.5 }
+      ],
+      gate: {
+        ax: x - px * gap * 0.5,
+        ay: y - py * gap * 0.5,
+        bx: x + px * gap * 0.5,
+        by: y + py * gap * 0.5
+      }
+    };
+  }
+
+  function resetRun() {
+    game.state = "playing";
+    game.phase = "TUNE";
+    game.score = 0;
+    game.timeLeft = game.duration;
+    game.crack = 0;
+    game.pitchField = -0.08;
+    game.volumeField = 0.1;
+    game.tuneClock = 0;
+    game.autoThawAt = 1.45;
+    game.thawClock = 0;
+    game.thawLimit = 1.7;
+    game.nextWicket = 0;
+    game.message = "Tune the court.";
+    game.messageTimer = 1.4;
+    game.endReason = "The weather instrument fell silent.";
+    game.bankedThisThaw = false;
+    game.crossedTrailThisThaw = false;
+    game.vibratoUsedThisThaw = false;
+    game.vibratoPulse = 0;
+    game.vibratoCooldown = 0;
+    game.wicketsThisThaw = 0;
+    game.usefulTouchThisThaw = false;
+    game.thawStartedAt = 0;
+    game.movingFrostPhase = Math.random() * TAU;
+    game.difficulty = 0;
+    game.ambience = 0;
+    particles = [];
+    trails = [];
+    bankWalls = [
+      { ax: 418, ay: 285, bx: 540, by: 235 },
+      { ax: 782, ay: 315, bx: 922, by: 350 },
+      { ax: 585, ay: 610, bx: 705, by: 540 }
+    ];
+    meltPatches = [
+      { x: 340, y: 280, rx: 128, ry: 78, drift: 0.8, phase: rand(0, TAU) },
+      { x: 875, y: 520, rx: 112, ry: 68, drift: 1.1, phase: rand(0, TAU) },
+      { x: 650, y: 420, rx: 80, ry: 52, drift: 0.5, phase: rand(0, TAU) }
+    ];
+    roughPatches = [
+      { x: 520, y: 515, rx: 92, ry: 62, spin: 0.3, phase: rand(0, TAU) },
+      { x: 920, y: 255, rx: 86, ry: 54, spin: 0.7, phase: rand(0, TAU) },
+      { x: 305, y: 590, rx: 92, ry: 56, spin: 1.2, phase: rand(0, TAU) }
+    ];
+    wickets = [
+      makeWicket(1, 300, 215, 0.05, 78, 76),
+      makeWicket(2, 845, 220, Math.PI / 2, 88, 76),
+      makeWicket(3, 990, 520, 0.18, 84, 76),
+      makeWicket(4, 645, 650, Math.PI / 2 + 0.2, 82, 76),
+      makeWicket(5, 255, 545, Math.PI / 2, 78, 76),
+      makeWicket(6, 635, 360, 0.75, 72, 76)
+    ];
+    stone.x = 250;
+    stone.y = 575;
+    stone.vx = 0;
+    stone.vy = 0;
+    stone.spin = 0;
+    stone.thawTrail = [];
+    stone.thawDistance = 0;
+  }
+
+  function startRun() {
+    resetRun();
+  }
+
+  function bumpScore(amount, label, x = stone.x, y = stone.y, color = "#ffca74") {
+    game.score = Math.max(0, game.score + amount);
+    particles.push({
+      type: "text",
+      x,
+      y,
+      vy: -22,
+      life: 1.2,
+      text: `${amount >= 0 ? "+" : ""}${amount} ${label}`,
+      color
+    });
+  }
+
+  function addMessage(msg, t = 1.1) {
+    game.message = msg;
+    game.messageTimer = t;
+  }
+
+  function triggerThaw() {
+    if (game.phase !== "TUNE") return;
+    const angleCurve = Math.sign(game.pitchField) * Math.pow(Math.abs(game.pitchField), 1.75);
+    const strengthCurve = Math.sign(game.volumeField) * Math.pow(Math.abs(game.volumeField), 1.9);
+    const baseAngle = angleCurve * Math.PI * 0.95 - Math.PI * 0.5;
+    const speed = 210 + Math.max(0, strengthCurve + 0.14) * 340;
+    stone.vx = Math.cos(baseAngle) * speed;
+    stone.vy = Math.sin(baseAngle) * speed;
+    stone.spin = 0;
+    stone.thawTrail = [{ x: stone.x, y: stone.y }];
+    stone.thawDistance = 0;
+    game.phase = "THAW";
+    game.thawClock = 0;
+    game.wicketsThisThaw = 0;
+    game.usefulTouchThisThaw = false;
+    game.bankedThisThaw = false;
+    game.crossedTrailThisThaw = false;
+    game.vibratoUsedThisThaw = false;
+    game.vibratoPulse = 0;
+    game.thawStartedAt = game.timeLeft;
+    game.thawLimit = lerp(1.55, 0.95, clamp((60 - game.timeLeft - 10) / 35, 0, 1));
+    addMessage("Thaw pulse.", 0.7);
+  }
+
+  function finishRun(reason) {
+    game.state = "gameover";
+    game.phase = "TUNE";
+    game.endReason = reason;
+    if (game.score > game.best) {
+      game.best = game.score;
+      localStorage.setItem("heterodyne-drift-best", String(game.best));
+    }
+  }
+
+  function updateDifficulty() {
+    const elapsed = game.duration - game.timeLeft;
+    game.difficulty = clamp(elapsed / 45, 0, 1);
+    const finalRush = game.timeLeft <= 15 ? 1 : 0;
+    game.autoThawAt = lerp(1.45, 0.82, clamp(elapsed / 50, 0, 1));
+    wickets.forEach((w, i) => {
+      const lateShrink = finalRush ? lerp(1, 0.7, 0.35 + i * 0.05) : 1;
+      w.clearScale = lerp(1.14, 0.9, game.difficulty) * lateShrink;
+    });
+  }
+
+  function tuneAdjust(value, dir, dt) {
+    const mag = Math.abs(value);
+    const step = lerp(0.55, 0.11, mag) * dt;
+    const edgeBoost = 0.45 * Math.pow(mag, 2.2) * dt;
+    return clamp(value + dir * (step + edgeBoost), -1, 1);
+  }
+
+  function updateTune(dt) {
+    game.tuneClock += dt;
+    if (keys.has("KeyA")) game.pitchField = tuneAdjust(game.pitchField, -1, dt);
+    if (keys.has("KeyD")) game.pitchField = tuneAdjust(game.pitchField, 1, dt);
+    if (keys.has("KeyJ")) game.volumeField = tuneAdjust(game.volumeField, -1, dt);
+    if (keys.has("KeyL")) game.volumeField = tuneAdjust(game.volumeField, 1, dt);
+    if (keys.has("KeyR")) {
+      game.pitchField = lerp(game.pitchField, 0, 1 - Math.pow(0.03, dt));
+      game.volumeField = lerp(game.volumeField, 0, 1 - Math.pow(0.03, dt));
+    }
+    if (pressed.has("Space") || game.tuneClock >= game.autoThawAt) {
+      triggerThaw();
+    }
+  }
+
+  function patchFactor(x, y, patch) {
+    const dx = (x - patch.x) / patch.rx;
+    const dy = (y - patch.y) / patch.ry;
+    const q = dx * dx + dy * dy;
+    if (q >= 1) return 0;
+    return 1 - q;
+  }
+
+  function trailInfluence(dt) {
+    let strongest = null;
+    for (const trail of trails) {
+      for (let i = 1; i < trail.points.length; i += 1) {
+        const p0 = trail.points[i - 1];
+        const p1 = trail.points[i];
+        const hit = segPointDist(p0.x, p0.y, p1.x, p1.y, stone.x, stone.y);
+        if (hit.d < 18) {
+          const dx = p1.x - p0.x;
+          const dy = p1.y - p0.y;
+          const len = Math.hypot(dx, dy) || 1;
+          const strength = (1 - hit.d / 18) * trail.power;
+          if (!strongest || strength > strongest.strength) {
+            strongest = { strength, dx: dx / len, dy: dy / len };
+          }
+        }
+      }
+    }
+    if (strongest) {
+      const speed = Math.hypot(stone.vx, stone.vy);
+      const follow = clamp(strongest.strength * dt * 4.2, 0, 0.22);
+      const desiredX = strongest.dx * speed;
+      const desiredY = strongest.dy * speed;
+      stone.vx = lerp(stone.vx, desiredX, follow);
+      stone.vy = lerp(stone.vy, desiredY, follow);
+    }
+  }
+
+  function applyTerrain(dt) {
+    let friction = 0.991;
+    let bounceScale = 1;
+    for (const patch of meltPatches) {
+      const f = patchFactor(stone.x, stone.y, patch);
+      if (f > 0) {
+        friction += 0.012 * f;
+        game.usefulTouchThisThaw = true;
+      }
+    }
+    for (const patch of roughPatches) {
+      const f = patchFactor(stone.x, stone.y, patch);
+      if (f > 0) {
+        friction -= 0.028 * f;
+        bounceScale -= 0.09 * f;
+        game.usefulTouchThisThaw = true;
+      }
+    }
+    friction = clamp(friction, 0.935, 1.004);
+    stone.vx *= Math.pow(friction, dt * 60);
+    stone.vy *= Math.pow(friction, dt * 60);
+    return bounceScale;
+  }
+
+  function bounceOnWalls(bounceScale) {
+    const wallLoss = 0.92 * bounceScale;
+    let slammed = false;
+    if (stone.x - stone.r < court.x) {
+      const impact = Math.abs(stone.vx);
+      stone.x = court.x + stone.r;
+      stone.vx = Math.abs(stone.vx) * wallLoss;
+      slammed = impact > 250;
+    } else if (stone.x + stone.r > court.x + court.w) {
+      const impact = Math.abs(stone.vx);
+      stone.x = court.x + court.w - stone.r;
+      stone.vx = -Math.abs(stone.vx) * wallLoss;
+      slammed = impact > 250;
+    }
+    if (stone.y - stone.r < court.y) {
+      const impact = Math.abs(stone.vy);
+      stone.y = court.y + stone.r;
+      stone.vy = Math.abs(stone.vy) * wallLoss;
+      slammed = slammed || impact > 250;
+    } else if (stone.y + stone.r > court.y + court.h) {
+      const impact = Math.abs(stone.vy);
+      stone.y = court.y + court.h - stone.r;
+      stone.vy = -Math.abs(stone.vy) * wallLoss;
+      slammed = slammed || impact > 250;
+    }
+    for (const wall of bankWalls) {
+      const near = segPointDist(wall.ax, wall.ay, wall.bx, wall.by, stone.x, stone.y);
+      if (near.d < stone.r + 4) {
+        const wallDx = wall.bx - wall.ax;
+        const wallDy = wall.by - wall.ay;
+        const wallLen = Math.hypot(wallDx, wallDy) || 1;
+        const nx = -wallDy / wallLen;
+        const ny = wallDx / wallLen;
+        const dot = stone.vx * nx + stone.vy * ny;
+        if (dot < 0) {
+          stone.x += nx * (stone.r + 4 - near.d);
+          stone.y += ny * (stone.r + 4 - near.d);
+          stone.vx -= 2 * dot * nx;
+          stone.vy -= 2 * dot * ny;
+          stone.vx *= 0.95 * bounceScale;
+          stone.vy *= 0.95 * bounceScale;
+          slammed = slammed || Math.abs(dot) > 230;
+        }
+      }
+    }
+    if (slammed) {
+      game.bankedThisThaw = true;
+      game.crack = clamp(game.crack + 12, 0, game.crackMax);
+      bumpScore(-15, "slam", stone.x, stone.y, "#ff6d5f");
+      addMessage("Court crack rises.", 0.8);
+      spawnShards(stone.x, stone.y, 7, "#ffb3a6");
+      if (game.crack >= game.crackMax) finishRun("The stone shattered the court.");
+    } else if (
+      stone.x - stone.r <= court.x + 0.5 ||
+      stone.x + stone.r >= court.x + court.w - 0.5 ||
+      stone.y - stone.r <= court.y + 0.5 ||
+      stone.y + stone.r >= court.y + court.h - 0.5
+    ) {
+      game.bankedThisThaw = true;
+      spawnShards(stone.x, stone.y, 4, "#d8f6ff");
+    }
+  }
+
+  function spawnShards(x, y, count, color) {
+    for (let i = 0; i < count; i += 1) {
+      const angle = rand(0, TAU);
+      const speed = rand(30, 140);
+      particles.push({
+        type: "spark",
+        x,
+        y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: rand(0.3, 0.8),
+        color,
+        size: rand(1.5, 3.8)
+      });
+    }
+  }
+
+  function maybeCrossTrail(prevX, prevY, x, y) {
+    for (const trail of trails) {
+      for (let i = 1; i < trail.points.length; i += 1) {
+        const p0 = trail.points[i - 1];
+        const p1 = trail.points[i];
+        const hit = segIntersection(prevX, prevY, x, y, p0.x, p0.y, p1.x, p1.y);
+        if (hit) {
+          game.crossedTrailThisThaw = true;
+          game.usefulTouchThisThaw = true;
+          return;
+        }
+      }
+    }
+  }
+
+  function checkWickets(prevX, prevY, x, y) {
+    const runStamp = game.duration - game.timeLeft;
+    for (const wicket of wickets) {
+      const gap = wicket.gap * wicket.clearScale;
+      const px = -Math.sin(wicket.angle);
+      const py = Math.cos(wicket.angle);
+      const gateAx = wicket.x - px * gap * 0.5;
+      const gateAy = wicket.y - py * gap * 0.5;
+      const gateBx = wicket.x + px * gap * 0.5;
+      const gateBy = wicket.y + py * gap * 0.5;
+      const hit = segIntersection(prevX, prevY, x, y, gateAx, gateAy, gateBx, gateBy);
+      if (!hit) continue;
+      if (runStamp - wicket.lastContactAt < 0.18) continue;
+      wicket.lastContactAt = runStamp;
+      wicket.flash = 1;
+      game.usefulTouchThisThaw = true;
+      if (game.nextWicket === wicket.id - 1) {
+        wicket.lastScoredAt = game.timeLeft;
+        game.nextWicket = (game.nextWicket + 1) % wickets.length;
+        game.wicketsThisThaw += 1;
+        let bonus = 100;
+        bumpScore(100, "wicket", wicket.x, wicket.y, "#ffefbf");
+        if (game.bankedThisThaw) {
+          bonus += 50;
+          bumpScore(50, "bank", wicket.x + 22, wicket.y - 26, "#9de7ff");
+        }
+        if (game.crossedTrailThisThaw) {
+          bonus += 30;
+          bumpScore(30, "groove", wicket.x - 18, wicket.y + 24, "#b6efff");
+        }
+        if (game.vibratoUsedThisThaw) {
+          bonus += 20;
+          bumpScore(20, "flourish", wicket.x + 8, wicket.y + 40, "#ffe39c");
+        }
+        if (game.wicketsThisThaw >= 2) {
+          bonus += 150;
+          bumpScore(150, "chain", wicket.x, wicket.y - 52, "#fff4d2");
+        }
+        game.score += bonus - 100;
+        addMessage(`Wicket ${wicket.id} sings.`, 0.95);
+        spawnShards(wicket.x, wicket.y, 10, "#fff2d0");
+      } else {
+        wicket.wrongFlash = 1;
+        bumpScore(-40, "wrong gate", wicket.x, wicket.y, "#ff8d7f");
+        addMessage(`Wrong wicket ${wicket.id}.`, 0.9);
+      }
+    }
+  }
+
+  function settleTrail() {
+    if (stone.thawTrail.length > 3) {
+      trails.push({
+        points: stone.thawTrail.slice(),
+        life: 1,
+        age: 0,
+        power: lerp(0.75, 1.2, Math.random())
+      });
+    }
+    if (!game.usefulTouchThisThaw && game.wicketsThisThaw === 0) {
+      game.crack = clamp(game.crack + 8, 0, game.crackMax);
+      bumpScore(-10, "waste", stone.x, stone.y, "#ff8d7f");
+      addMessage("Drift wasted.", 0.8);
+      if (game.crack >= game.crackMax) finishRun("Too many wasted thaws cracked the court.");
+    }
+    game.phase = "TUNE";
+    game.tuneClock = 0;
+    game.pitchField = lerp(game.pitchField, game.pitchField * 0.68, 0.6);
+    game.volumeField = lerp(game.volumeField, game.volumeField * 0.7, 0.6);
+    stone.vx = 0;
+    stone.vy = 0;
+  }
+
+  function updateThaw(dt) {
+    game.thawClock += dt;
+    const prevX = stone.x;
+    const prevY = stone.y;
+
+    if (pressed.has("ShiftLeft") || pressed.has("ShiftRight")) {
+      if (game.vibratoCooldown <= 0) {
+        game.vibratoPulse = 0.42;
+        game.vibratoCooldown = 0.5;
+        game.vibratoUsedThisThaw = true;
+      }
+    }
+
+    game.vibratoCooldown = Math.max(0, game.vibratoCooldown - dt);
+    if (game.vibratoPulse > 0) {
+      game.vibratoPulse = Math.max(0, game.vibratoPulse - dt);
+      const wobble = Math.sin((0.42 - game.vibratoPulse) * 24) * 0.12;
+      const angle = Math.atan2(stone.vy, stone.vx) + wobble;
+      const speed = Math.hypot(stone.vx, stone.vy);
+      stone.vx = Math.cos(angle) * speed;
+      stone.vy = Math.sin(angle) * speed;
+    }
+
+    trailInfluence(dt);
+    const bounceScale = applyTerrain(dt);
+    stone.x += stone.vx * dt;
+    stone.y += stone.vy * dt;
+    bounceOnWalls(bounceScale);
+    maybeCrossTrail(prevX, prevY, stone.x, stone.y);
+    checkWickets(prevX, prevY, stone.x, stone.y);
+
+    stone.thawDistance += dist(prevX, prevY, stone.x, stone.y);
+    const last = stone.thawTrail[stone.thawTrail.length - 1];
+    if (!last || dist(last.x, last.y, stone.x, stone.y) > 8) {
+      stone.thawTrail.push({ x: stone.x, y: stone.y });
+    }
+
+    const speed = Math.hypot(stone.vx, stone.vy);
+    if (speed < 28 || game.thawClock >= game.thawLimit) {
+      settleTrail();
+    } else {
+      for (let i = 0; i < 2; i += 1) {
+        particles.push({
+          type: "spark",
+          x: stone.x + rand(-4, 4),
+          y: stone.y + rand(-4, 4),
+          vx: rand(-20, 20),
+          vy: rand(12, 60),
+          life: rand(0.16, 0.34),
+          color: Math.random() < 0.65 ? "#d0f6ff" : "#fff0c3",
+          size: rand(1, 2.4)
+        });
+      }
+    }
+  }
+
+  function updatePlaying(dt) {
+    game.timeLeft = Math.max(0, game.timeLeft - dt);
+    updateDifficulty();
+    game.movingFrostPhase += dt * (0.28 + game.difficulty * 0.33);
+    game.ambience += dt;
+    if (game.messageTimer > 0) game.messageTimer = Math.max(0, game.messageTimer - dt);
+
+    for (const patch of meltPatches) {
+      patch.phase += dt * (0.25 + patch.drift * 0.2);
+      patch.x += Math.sin(patch.phase) * dt * (4 + patch.drift * 4);
+      patch.y += Math.cos(patch.phase * 1.3) * dt * (3 + patch.drift * 3);
+      patch.x = clamp(patch.x, court.x + 120, court.x + court.w - 120);
+      patch.y = clamp(patch.y, court.y + 80, court.y + court.h - 80);
+    }
+
+    wickets.forEach((w) => {
+      w.flash = Math.max(0, w.flash - dt * 1.4);
+      w.wrongFlash = Math.max(0, w.wrongFlash - dt * 1.8);
+    });
+    trails.forEach((trail) => {
+      trail.age += dt;
+      trail.life = Math.max(0.12, 1 - trail.age / 60);
+    });
+    particles = particles.filter((p) => {
+      p.life -= dt;
+      if (p.type === "spark") {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vx *= Math.pow(0.72, dt * 6);
+        p.vy = p.vy * Math.pow(0.78, dt * 6) + 22 * dt;
+      } else if (p.type === "text") {
+        p.y += p.vy * dt;
+      }
+      return p.life > 0;
+    });
+
+    if (game.timeLeft <= 0) {
+      finishRun("The sixty-second weather window closed.");
+      return;
+    }
+
+    if (game.phase === "TUNE") updateTune(dt);
+    if (game.phase === "THAW") updateThaw(dt);
+  }
+
+  function drawBackground() {
+    ctx.clearRect(0, 0, W, H);
+
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#2c1817");
+    bg.addColorStop(0.52, "#59332d");
+    bg.addColorStop(1, "#0d0a0a");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    for (let i = 0; i < 22; i += 1) {
+      const x = (i / 21) * W;
+      ctx.strokeStyle = `rgba(157, 231, 255, ${0.035 + Math.sin(game.ambience * 0.6 + i) * 0.01})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, 0);
+      ctx.lineTo(x + Math.sin(game.ambience + i) * 24, 120);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(8, 7, 7, 0.3)";
+    ctx.fillRect(court.x - 18, court.y - 18, court.w + 36, court.h + 36);
+
+    const courtGrad = ctx.createLinearGradient(court.x, court.y, court.x + court.w, court.y + court.h);
+    courtGrad.addColorStop(0, "#8b5245");
+    courtGrad.addColorStop(0.6, "#6b3e35");
+    courtGrad.addColorStop(1, "#4a2623");
+    ctx.fillStyle = courtGrad;
+    ctx.fillRect(court.x, court.y, court.w, court.h);
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.08)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 11; i += 1) {
+      const y = court.y + (i / 10) * court.h;
+      ctx.beginPath();
+      ctx.moveTo(court.x, y);
+      ctx.lineTo(court.x + court.w, y + Math.sin(i * 1.7) * 12);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    drawPatches();
+    drawTrails();
+    drawBanks();
+
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.82)";
+    ctx.lineWidth = 5;
+    ctx.strokeRect(court.x, court.y, court.w, court.h);
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.2)";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(court.x + 14, court.y + 14, court.w - 28, court.h - 28);
+  }
+
+  function drawPatches() {
+    for (const patch of meltPatches) {
+      ctx.save();
+      ctx.translate(patch.x, patch.y);
+      ctx.rotate(Math.sin(patch.phase) * 0.2);
+      const grad = ctx.createRadialGradient(0, 0, patch.rx * 0.15, 0, 0, patch.rx);
+      grad.addColorStop(0, "rgba(215, 246, 255, 0.24)");
+      grad.addColorStop(0.6, "rgba(167, 227, 255, 0.12)");
+      grad.addColorStop(1, "rgba(167, 227, 255, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, patch.rx, patch.ry, 0, 0, TAU);
+      ctx.fill();
+      ctx.strokeStyle = "rgba(212, 247, 255, 0.18)";
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+      for (let i = -2; i <= 2; i += 1) {
+        ctx.strokeStyle = "rgba(241, 252, 255, 0.12)";
+        ctx.beginPath();
+        ctx.moveTo(-patch.rx * 0.7, i * 10);
+        ctx.lineTo(patch.rx * 0.7, i * 10 + Math.sin(game.movingFrostPhase + i + patch.phase) * 12);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for (const patch of roughPatches) {
+      ctx.save();
+      ctx.translate(patch.x, patch.y);
+      ctx.rotate(Math.cos(patch.phase) * 0.18);
+      const grad = ctx.createRadialGradient(0, 0, 4, 0, 0, patch.rx);
+      grad.addColorStop(0, "rgba(78, 41, 34, 0.44)");
+      grad.addColorStop(1, "rgba(59, 27, 23, 0)");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, patch.rx, patch.ry, 0, 0, TAU);
+      ctx.fill();
+      for (let i = 0; i < 18; i += 1) {
+        const a = (i / 18) * TAU;
+        const r1 = patch.rx * rand(0.1, 0.4);
+        const r2 = patch.rx * rand(0.55, 0.95);
+        ctx.strokeStyle = "rgba(35, 17, 15, 0.18)";
+        ctx.beginPath();
+        ctx.moveTo(Math.cos(a) * r1, Math.sin(a) * patch.ry * 0.5);
+        ctx.lineTo(Math.cos(a) * r2, Math.sin(a) * patch.ry * rand(0.7, 1));
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawBanks() {
+    ctx.save();
+    ctx.lineCap = "round";
+    for (const wall of bankWalls) {
+      ctx.strokeStyle = "rgba(255, 244, 213, 0.38)";
+      ctx.lineWidth = 10;
+      ctx.beginPath();
+      ctx.moveTo(wall.ax, wall.ay);
+      ctx.lineTo(wall.bx, wall.by);
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 244, 213, 0.12)";
+      ctx.lineWidth = 18;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTrails() {
+    ctx.save();
+    ctx.lineCap = "round";
+    trails.forEach((trail, index) => {
+      if (trail.points.length < 2) return;
+      ctx.strokeStyle = `rgba(205, 247, 255, ${0.12 + trail.life * 0.22})`;
+      ctx.lineWidth = 2.5 + trail.life * 1.7;
+      ctx.beginPath();
+      ctx.moveTo(trail.points[0].x, trail.points[0].y);
+      for (let i = 1; i < trail.points.length; i += 1) {
+        ctx.lineTo(trail.points[i].x, trail.points[i].y);
+      }
+      ctx.stroke();
+      if (index % 2 === 0) {
+        ctx.strokeStyle = `rgba(255, 246, 221, ${0.03 + trail.life * 0.06})`;
+        ctx.lineWidth = 7;
+        ctx.stroke();
+      }
+    });
+    if (stone.thawTrail.length > 1) {
+      ctx.strokeStyle = "rgba(235, 252, 255, 0.92)";
+      ctx.lineWidth = 3.5;
+      ctx.beginPath();
+      ctx.moveTo(stone.thawTrail[0].x, stone.thawTrail[0].y);
+      for (let i = 1; i < stone.thawTrail.length; i += 1) {
+        ctx.lineTo(stone.thawTrail[i].x, stone.thawTrail[i].y);
+      }
+      ctx.stroke();
+      ctx.strokeStyle = "rgba(255, 225, 164, 0.24)";
+      ctx.lineWidth = 8;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawWickets() {
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = "bold 18px Georgia, serif";
+    wickets.forEach((wicket) => {
+      const isNext = game.nextWicket === wicket.id - 1;
+      const gap = wicket.gap * wicket.clearScale;
+      const px = -Math.sin(wicket.angle);
+      const py = Math.cos(wicket.angle);
+      const nx = Math.cos(wicket.angle);
+      const ny = Math.sin(wicket.angle);
+      const topX = wicket.x + px * gap * 0.5;
+      const topY = wicket.y + py * gap * 0.5;
+      const botX = wicket.x - px * gap * 0.5;
+      const botY = wicket.y - py * gap * 0.5;
+      const flash = wicket.flash;
+      const wrong = wicket.wrongFlash;
+
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.strokeStyle = wrong > 0 ? `rgba(255, 120, 103, ${0.5 + wrong * 0.5})` : isNext ? `rgba(255, 244, 214, ${0.9 + flash * 0.1})` : "rgba(238, 230, 210, 0.56)";
+      ctx.lineWidth = isNext ? 6 : 4;
+      ctx.beginPath();
+      ctx.moveTo(topX - nx * wicket.length * 0.5, topY - ny * wicket.length * 0.5);
+      ctx.lineTo(topX + nx * wicket.length * 0.5, topY + ny * wicket.length * 0.5);
+      ctx.moveTo(botX - nx * wicket.length * 0.5, botY - ny * wicket.length * 0.5);
+      ctx.lineTo(botX + nx * wicket.length * 0.5, botY + ny * wicket.length * 0.5);
+      ctx.stroke();
+
+      if (isNext) {
+        ctx.strokeStyle = `rgba(157, 231, 255, ${0.2 + 0.35 * (0.5 + 0.5 * Math.sin(game.ambience * 4 + wicket.id))})`;
+        ctx.lineWidth = 14;
+        ctx.stroke();
+      }
+
+      ctx.fillStyle = isNext ? "#fff2ce" : "#eadfc7";
+      ctx.fillText(String(wicket.id), wicket.x, wicket.y - 24);
+      ctx.restore();
+    });
+  }
+
+  function drawStone() {
+    if (game.phase === "TUNE") drawFields();
+
+    ctx.save();
+    ctx.translate(stone.x, stone.y);
+    const glow = ctx.createRadialGradient(-4, -4, 1, 0, 0, 28);
+    glow.addColorStop(0, "rgba(255, 245, 225, 0.94)");
+    glow.addColorStop(0.55, "rgba(224, 216, 199, 0.94)");
+    glow.addColorStop(1, "rgba(58, 46, 42, 0.88)");
+    ctx.fillStyle = glow;
+    ctx.beginPath();
+    ctx.arc(0, 0, stone.r, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(35, 24, 22, 0.8)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(-3, -3, 2.2, 0, TAU);
+    ctx.fillStyle = "rgba(255, 255, 255, 0.52)";
+    ctx.fill();
+    if (game.phase === "THAW") {
+      ctx.strokeStyle = "rgba(157, 231, 255, 0.7)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, stone.r + 6 + Math.sin(game.ambience * 14) * 2, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawFields() {
+    const pitchCurve = Math.sign(game.pitchField) * Math.pow(Math.abs(game.pitchField), 1.6);
+    const volumeCurve = Math.sign(game.volumeField) * Math.pow(Math.abs(game.volumeField), 1.75);
+    const baseAngle = pitchCurve * Math.PI * 0.95 - Math.PI * 0.5;
+    const range = 76 + Math.abs(volumeCurve) * 98;
+
+    ctx.save();
+    ctx.translate(stone.x, stone.y);
+    ctx.rotate(baseAngle);
+    for (let i = 0; i < 5; i += 1) {
+      const alpha = 0.08 + i * 0.025;
+      ctx.strokeStyle = `rgba(157, 231, 255, ${alpha})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, range + i * 20, 24 + i * 10, 0, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.rotate(-baseAngle * 2);
+    for (let i = 0; i < 4; i += 1) {
+      ctx.strokeStyle = `rgba(255, 204, 122, ${0.08 + i * 0.03})`;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 28 + i * 14, range * 0.5 + i * 12, 0, 0, TAU);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(10, 9, 9, 0.72)";
+    ctx.fillRect(48, 34, 1184, 72);
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.12)";
+    ctx.strokeRect(48, 34, 1184, 72);
+
+    ctx.fillStyle = "#f2e7d1";
+    ctx.font = "bold 24px Georgia, serif";
+    ctx.textAlign = "left";
+    ctx.fillText("Heterodyne Drift", 70, 63);
+    ctx.font = "16px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.76)";
+    ctx.fillText(game.phase === "TUNE" ? "Tune invisible fields, then release the weather." : "The thaw is live. Drift and trust the groove.", 70, 88);
+
+    ctx.textAlign = "right";
+    ctx.font = "bold 30px Georgia, serif";
+    ctx.fillStyle = "#fff2ce";
+    ctx.fillText(String(Math.floor(game.score)), 1160, 66);
+    ctx.font = "15px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.72)";
+    ctx.fillText("score", 1160, 88);
+
+    drawMeters();
+
+    if (game.messageTimer > 0) {
+      ctx.textAlign = "center";
+      ctx.font = "italic 20px Georgia, serif";
+      ctx.fillStyle = `rgba(255, 243, 210, ${Math.min(1, game.messageTimer)})`;
+      ctx.fillText(game.message, W * 0.5, court.y + court.h + 44);
+    }
+    ctx.restore();
+  }
+
+  function drawMeters() {
+    const baseX = 430;
+    const pitchX = baseX;
+    const volX = baseX + 210;
+    const top = 52;
+    const width = 160;
+    const height = 12;
+
+    ctx.textAlign = "left";
+    ctx.font = "14px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.76)";
+    ctx.fillText("PITCH FIELD", pitchX, top - 10);
+    ctx.fillText("VOLUME FIELD", volX, top - 10);
+    ctx.fillText("NEXT WICKET", 875, top - 10);
+    ctx.fillText("CRACK", 1008, top - 10);
+
+    drawFieldMeter(pitchX, top, width, height, game.pitchField, "#9de7ff");
+    drawFieldMeter(volX, top, width, height, game.volumeField, "#ffca74");
+
+    ctx.fillStyle = "rgba(255, 244, 214, 0.18)";
+    ctx.fillRect(875, top, 86, height);
+    ctx.fillStyle = "#fff2ce";
+    ctx.font = "bold 18px Georgia, serif";
+    ctx.fillText(String(wickets[game.nextWicket]?.id || 1), 910, top + 11);
+
+    ctx.fillStyle = "rgba(255, 244, 214, 0.14)";
+    ctx.fillRect(1008, top, 142, height);
+    ctx.fillStyle = "rgba(255, 109, 95, 0.9)";
+    ctx.fillRect(1008, top, 142 * (game.crack / game.crackMax), height);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#fff2ce";
+    ctx.fillText(`${Math.ceil(game.timeLeft)}s`, 1185, 63);
+  }
+
+  function drawFieldMeter(x, y, w, h, value, color) {
+    ctx.fillStyle = "rgba(255, 244, 214, 0.14)";
+    ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = color;
+    const half = w * 0.5;
+    const len = half * Math.abs(value);
+    const start = value >= 0 ? x + half : x + half - len;
+    ctx.fillRect(start, y, len, h);
+    ctx.strokeStyle = "rgba(255, 244, 214, 0.18)";
+    ctx.strokeRect(x, y, w, h);
+    ctx.strokeStyle = "rgba(255, 244, 214, 0.35)";
+    ctx.beginPath();
+    ctx.moveTo(x + half, y - 2);
+    ctx.lineTo(x + half, y + h + 2);
+    ctx.stroke();
+  }
+
+  function drawParticles() {
+    particles.forEach((p) => {
+      if (p.type === "spark") {
+        ctx.fillStyle = p.color.replace(")", `, ${Math.min(1, p.life)})`).replace("rgb", "rgba");
+        if (!p.color.startsWith("rgb")) ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.min(1, p.life * 1.6);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, TAU);
+        ctx.fill();
+        ctx.globalAlpha = 1;
+      } else if (p.type === "text") {
+        ctx.globalAlpha = Math.min(1, p.life);
+        ctx.fillStyle = p.color;
+        ctx.font = "bold 17px Georgia, serif";
+        ctx.textAlign = "center";
+        ctx.fillText(p.text, p.x, p.y);
+        ctx.globalAlpha = 1;
+      }
+    });
+  }
+
+  function drawTitleOverlay() {
+    ctx.fillStyle = "rgba(4, 4, 5, 0.48)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(11, 10, 10, 0.84)";
+    ctx.fillRect(170, 145, 940, 610);
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.16)";
+    ctx.strokeRect(170, 145, 940, 610);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff2ce";
+    ctx.font = "bold 62px Georgia, serif";
+    ctx.fillText("Heterodyne Drift", W * 0.5, 240);
+    ctx.font = "italic 24px Georgia, serif";
+    ctx.fillStyle = "rgba(182, 239, 255, 0.86)";
+    ctx.fillText("A haunted roque court operated by weather ghosts.", W * 0.5, 282);
+
+    ctx.font = "20px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.82)";
+    wrapText(
+      "You never strike the stone directly. Tune two theremin-like fields during TUNE, then release a brief THAW pulse and watch the rock glide under stored conditions. Old scrape lines become grooves you can reuse for later trick shots.",
+      W * 0.5,
+      360,
+      710,
+      32
+    );
+
+    const lines = [
+      "A / D shift the pitch field and set drift angle.",
+      "J / L shift the volume field and set drift strength.",
+      "Space releases the thaw early. Otherwise it fires on its own.",
+      "R damps both fields toward center for a safer reset.",
+      "Shift fires a short vibrato during THAW for delicate curve correction.",
+      "Clear wickets in order, ride your own trails, avoid hard slams and wasted thaws."
+    ];
+    ctx.textAlign = "left";
+    ctx.font = "19px Georgia, serif";
+    lines.forEach((line, i) => {
+      ctx.fillStyle = i < 4 ? "rgba(255, 241, 206, 0.9)" : "rgba(182, 239, 255, 0.82)";
+      ctx.fillText(line, 250, 455 + i * 42);
+    });
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(255, 202, 116, 0.95)";
+    ctx.font = "bold 26px Georgia, serif";
+    ctx.fillText("Press Space or Enter to begin the 60 second run", W * 0.5, 700);
+  }
+
+  function drawGameOverOverlay() {
+    ctx.fillStyle = "rgba(5, 5, 6, 0.55)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(12, 10, 10, 0.86)";
+    ctx.fillRect(242, 205, 796, 470);
+    ctx.strokeStyle = "rgba(242, 231, 209, 0.16)";
+    ctx.strokeRect(242, 205, 796, 470);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff2ce";
+    ctx.font = "bold 56px Georgia, serif";
+    ctx.fillText("Run Over", W * 0.5, 290);
+    ctx.font = "italic 24px Georgia, serif";
+    ctx.fillStyle = "rgba(182, 239, 255, 0.86)";
+    ctx.fillText(game.endReason, W * 0.5, 332);
+
+    ctx.font = "18px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.72)";
+    ctx.fillText("Final score", W * 0.5, 398);
+    ctx.font = "bold 72px Georgia, serif";
+    ctx.fillStyle = "#fff2ce";
+    ctx.fillText(String(Math.floor(game.score)), W * 0.5, 470);
+
+    ctx.font = "18px Georgia, serif";
+    ctx.fillStyle = "rgba(242, 231, 209, 0.72)";
+    ctx.fillText(`Best ${game.best}`, W * 0.5, 520);
+    ctx.fillText(`Next wicket was ${wickets[game.nextWicket]?.id || 1}`, W * 0.5, 555);
+
+    ctx.font = "bold 24px Georgia, serif";
+    ctx.fillStyle = "rgba(255, 202, 116, 0.95)";
+    ctx.fillText("Press Space or Enter to tune the court again", W * 0.5, 620);
+  }
+
+  function wrapText(text, x, y, maxWidth, lineHeight) {
+    const words = text.split(" ");
+    let line = "";
+    let lineY = y;
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, lineY);
+        line = word;
+        lineY += lineHeight;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, lineY);
+  }
+
+  function render() {
+    drawBackground();
+    drawWickets();
+    drawStone();
+    drawParticles();
+    drawHud();
+    if (game.state === "title") drawTitleOverlay();
+    if (game.state === "gameover") drawGameOverOverlay();
+  }
+
+  function tick(ts) {
+    const dt = Math.min(0.033, (ts - game.lastTime) / 1000 || 0.016);
+    game.lastTime = ts;
+    if (game.state === "playing") updatePlaying(dt);
+    render();
+    pressed.clear();
+    requestAnimationFrame(tick);
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+    if (!keys.has(e.code)) pressed.add(e.code);
+    keys.add(e.code);
+
+    if ((e.code === "Space" || e.code === "Enter") && (game.state === "title" || game.state === "gameover")) {
+      startRun();
+    }
+  });
+
+  window.addEventListener("keyup", (e) => {
+    keys.delete(e.code);
+  });
+
+  resetRun();
+  game.state = "title";
+  requestAnimationFrame(tick);
+})();
+</script>
+</body>
+</html>
