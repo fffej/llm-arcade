@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pole to Sole</title>
+<style>
+  :root {
+    --bg0: #071018;
+    --bg1: #0c1e2c;
+    --ink: #eff9ff;
+    --muted: rgba(239, 249, 255, 0.72);
+    --line: rgba(168, 221, 238, 0.2);
+    --panel: rgba(7, 16, 24, 0.78);
+    --ice: #b9f6ff;
+    --cyan: #66d9ff;
+    --mint: #7cffb3;
+    --amber: #ffd27a;
+    --rose: #ff8b97;
+    --warn: #ff6b63;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    background:
+      radial-gradient(circle at top, rgba(136, 231, 255, 0.14), transparent 30%),
+      radial-gradient(circle at 20% 10%, rgba(90, 255, 200, 0.08), transparent 24%),
+      linear-gradient(180deg, #061018 0%, #0b1621 48%, #050b11 100%);
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1220px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    color: var(--ink);
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: rgba(5, 10, 14, 0.76);
+    backdrop-filter: blur(8px);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(255, 210, 122, 0.8);
+    color: var(--amber);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background:
+      radial-gradient(circle at 50% 40%, rgba(102, 217, 255, 0.06), transparent 24%),
+      linear-gradient(180deg, rgba(8, 18, 26, 0.96), rgba(5, 10, 15, 1));
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.46),
+      inset 0 0 90px rgba(102, 217, 255, 0.05);
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; line-height: 1.45; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1200" height="820" aria-label="Pole to Sole"></canvas>
+      <div class="note">Move with WASD or arrows. Hold and release Space to plant a delayed snap. Press X to commit a 1-second scan. Press Z to toggle INSTEP and HEEL.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const arena = { x: 70, y: 72, w: 1060, h: 690 };
+  const poleTop = arena.y + 44;
+  const poleBottom = arena.y + arena.h - 44;
+  const centerX = arena.x + arena.w / 2;
+
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const easeOut = t => 1 - Math.pow(1 - t, 3);
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const sizeNames = ["NARROW", "MID", "WIDE"];
+  const sizeColors = ["#86f0ff", "#ffe08a", "#ff9bb6"];
+
+  const rng = {
+    range(min, max) { return min + Math.random() * (max - min); },
+    int(min, max) { return Math.floor(this.range(min, max + 1)); },
+    pick(list) { return list[Math.floor(Math.random() * list.length)]; }
+  };
+
+  let state = "title";
+  let stateTimer = 0;
+  let worldTime = 0;
+  let runTime = 60;
+  let score = 0;
+  let bestScore = 0;
+  let citation = 0;
+  let collapse = 0;
+  let polarity = "INSTEP";
+  let scanTimer = 0;
+  let scanCooldown = 0;
+  let charge = 0;
+  let message = "";
+  let messageTimer = 0;
+  let finalReason = "";
+  let spawnTimer = 0;
+  let shake = 0;
+
+  const reticle = {
+    x: centerX,
+    y: arena.y + arena.h * 0.5,
+    speed: 420,
+    radius: 16
+  };
+
+  const flocks = [];
+  const gates = [];
+  const snaps = [];
+  const bursts = [];
+  const particles = [];
+  const popups = [];
+  const scanRings = [];
+
+  function difficulty() {
+    return clamp((60 - runTime) / 60, 0, 1);
+  }
+
+  function finalRush() {
+    return runTime <= 15 ? 1 : 0;
+  }
+
+  function addPopup(text, x, y, color = "#ffe08a", life = 1.2) {
+    popups.push({ text, x, y, color, life, maxLife: life });
+  }
+
+  function addMessage(text, time = 1.1) {
+    message = text;
+    messageTimer = time;
+  }
+
+  function addParticles(x, y, color, count, speed) {
+    for (let i = 0; i < count; i++) {
+      const angle = rng.range(-Math.PI, Math.PI);
+      const mag = rng.range(speed * 0.2, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(angle) * mag,
+        vy: Math.sin(angle) * mag,
+        life: rng.range(0.4, 1.2),
+        maxLife: 1.2,
+        color
+      });
+    }
+  }
+
+  function clearRunArrays() {
+    flocks.length = 0;
+    gates.length = 0;
+    snaps.length = 0;
+    bursts.length = 0;
+    particles.length = 0;
+    popups.length = 0;
+    scanRings.length = 0;
+  }
+
+  function createGate(track, phase) {
+    const y = arena.y + arena.h * (0.31 + track * 0.17);
+    return {
+      track,
+      y,
+      phase,
+      x: centerX,
+      size: rng.int(0, 2),
+      width: 98,
+      height: 42,
+      flash: 0,
+      afterglow: 0
+    };
+  }
+
+  function resetRun() {
+    worldTime = 0;
+    runTime = 60;
+    score = 0;
+    citation = 0;
+    collapse = 0;
+    polarity = "INSTEP";
+    scanTimer = 0;
+    scanCooldown = 0;
+    charge = 0;
+    finalReason = "";
+    spawnTimer = 0.2;
+    shake = 0;
+    reticle.x = centerX;
+    reticle.y = arena.y + arena.h * 0.5;
+    clearRunArrays();
+    gates.push(createGate(0, 0.3));
+    gates.push(createGate(1, 2.1));
+    gates.push(createGate(2, 4.2));
+    for (let i = 0; i < 4; i++) spawnFlock(i < 2 ? 1 : -1, true);
+  }
+
+  function startRun() {
+    resetRun();
+    state = "play";
+    stateTimer = 0;
+    addMessage("Run the illegal fitting route.");
+  }
+
+  function endRun(reason) {
+    finalReason = reason;
+    state = "gameover";
+    stateTimer = 0;
+    bestScore = Math.max(bestScore, score);
+  }
+
+  function flockBaseSpeed() {
+    return 0.1 + difficulty() * 0.085 + finalRush() * 0.03;
+  }
+
+  function spawnFlock(dir = rng.pick([1, -1]), intro = false) {
+    const d = difficulty();
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const widthScale = 0.75 + d * 0.38;
+    const y = dir === 1 ? arena.y - rng.range(40, 180) : arena.y + arena.h + rng.range(40, 180);
+    flocks.push({
+      x: centerX + side * rng.range(120, 290),
+      y,
+      dir,
+      size: rng.int(0, 2),
+      progress: dir === 1 ? rng.range(-0.16, intro ? 0.12 : 0.02) : rng.range(0.98, intro ? 1.16 : 1.08),
+      speed: flockBaseSpeed() + rng.range(-0.015, 0.025) + (intro ? -0.02 : 0),
+      laneBias: rng.range(-90, 90),
+      side,
+      arcAmp: rng.range(150, 270) * widthScale,
+      wobbleAmp: rng.range(16, 32) * (0.6 + d * 1.3),
+      wobbleFreq: rng.range(0.8, 1.8),
+      heading: 0,
+      trail: [],
+      wing: rng.range(0, Math.PI * 2),
+      outboundDone: false,
+      returnDone: false,
+      outboundScored: false,
+      returnScored: false,
+      reversed: false,
+      lastTrack: -1,
+      badFitCooldown: 0,
+      bright: 0,
+      scannedReturn: false,
+      snapImpulse: 0
+    });
+  }
+
+  function plantSnap() {
+    const power = clamp(charge / 1.3, 0.18, 1);
+    const radius = lerp(70, 150, power);
+    snaps.push({
+      x: reticle.x,
+      y: reticle.y,
+      timer: 0.5 - power * 0.14,
+      radius,
+      polarity,
+      power,
+      flash: 0
+    });
+    addParticles(reticle.x, reticle.y, polarity === "INSTEP" ? "#86f0ff" : "#ffab8f", 10, 70);
+  }
+
+  function activateScan() {
+    if (scanTimer > 0 || scanCooldown > 0) return;
+    scanTimer = 1;
+    scanCooldown = 0.15;
+    scanRings.push({ life: 1, maxLife: 1 });
+  }
+
+  function targetXForGate(gate) {
+    const drift = Math.sin(worldTime * (0.5 + difficulty() * 1.5) + gate.phase) * (170 + difficulty() * 85);
+    const wobble = Math.sin(worldTime * 0.8 + gate.phase * 2.1) * 34;
+    return centerX + drift + wobble;
+  }
+
+  function flockPosition(flock, progress = flock.progress) {
+    const laneWave = Math.sin(progress * Math.PI * (1.1 + difficulty() * 0.5) + flock.side * 0.7);
+    const wobble = Math.sin(worldTime * flock.wobbleFreq + progress * Math.PI * 4 + flock.wing) * flock.wobbleAmp;
+    const x = centerX + flock.laneBias + laneWave * flock.arcAmp + wobble;
+    const y = lerp(poleTop, poleBottom, clamp(progress, 0, 1));
+    return { x, y };
+  }
+
+  function scoreDelta(value, x, y, color) {
+    score += value;
+    addPopup((value > 0 ? "+" : "") + value, x, y, color);
+  }
+
+  function penaltyFlock(flock, text, value) {
+    if (flock.badFitCooldown > 0) return;
+    flock.badFitCooldown = 0.45;
+    scoreDelta(value, flock.x, flock.y - 12, "#ff8b97");
+    addMessage(text, 0.8);
+    shake = Math.max(shake, 5);
+  }
+
+  function applyBurst(burst) {
+    let hitCount = 0;
+    for (const flock of flocks) {
+      const d = dist(burst.x, burst.y, flock.x, flock.y);
+      if (d > burst.radius) continue;
+      hitCount += 1;
+      const strength = (1 - d / burst.radius) * burst.power;
+      flock.bright = Math.max(flock.bright, 0.7);
+      flock.snapImpulse = Math.max(flock.snapImpulse, strength);
+      if (burst.polarity === "INSTEP") {
+        flock.arcAmp *= 1 - 0.22 * strength;
+        flock.laneBias *= 1 - 0.3 * strength;
+      } else {
+        const side = Math.sign(flock.x - centerX) || flock.side || 1;
+        flock.arcAmp *= 1 + 0.18 * strength;
+        flock.laneBias += side * 100 * strength;
+      }
+      flock.arcAmp = clamp(flock.arcAmp, 70, 350);
+      flock.laneBias = clamp(flock.laneBias, -310, 310);
+    }
+    if (hitCount >= 2) {
+      const multiplier = Math.max(2, hitCount);
+      const bonus = 10 * hitCount * multiplier;
+      scoreDelta(bonus, burst.x, burst.y - 24, "#7cffb3");
+      addMessage("Combo refit x" + multiplier, 0.9);
+    }
+  }
+
+  function registerGateCheck(flock, gate) {
+    if (flock.lastTrack === gate.track) return;
+    flock.lastTrack = gate.track;
+    const match = flock.size === gate.size;
+    if (!match) {
+      penaltyFlock(flock, "Wrong shoe band.", -35);
+      gate.flash = 0.8;
+      addParticles(flock.x, flock.y, "#ff8b97", 8, 80);
+      return;
+    }
+    if (!flock.outboundDone) {
+      flock.outboundDone = true;
+      flock.outboundScored = true;
+      flock.bright = 1;
+      gate.flash = 1;
+      scoreDelta(40, flock.x, flock.y - 18, "#7cffb3");
+      addMessage("Outbound fit stamped.", 0.75);
+    } else if (flock.reversed && !flock.returnDone) {
+      flock.returnDone = true;
+      flock.returnScored = true;
+      flock.bright = 1;
+      gate.flash = 1;
+      scoreDelta(60, flock.x, flock.y - 18, "#86f0ff");
+      const bonus = flock.scannedReturn ? 0 : 30;
+      if (bonus) scoreDelta(bonus, flock.x + 20, flock.y - 34, "#ffe08a");
+      scoreDelta(150, flock.x, flock.y - 52, "#ffd27a");
+      addMessage(bonus ? "Blind trust migration." : "Full migration complete.", 0.9);
+      addParticles(flock.x, flock.y, "#ffd27a", 16, 120);
+      flock.remove = true;
+      spawnFlock(flock.dir * -1);
+    }
+  }
+
+  function updateGates(dt) {
+    for (const gate of gates) {
+      if (Math.random() < 0.003 + difficulty() * 0.008) gate.size = rng.int(0, 2);
+      gate.x = targetXForGate(gate);
+      gate.flash = Math.max(0, gate.flash - dt * 1.8);
+      if (scanTimer > 0) gate.afterglow = 0.85;
+      else gate.afterglow = Math.max(0, gate.afterglow - dt * (1.8 - difficulty() * 0.9));
+    }
+  }
+
+  function updateFlocks(dt) {
+    for (const flock of flocks) {
+      flock.badFitCooldown = Math.max(0, flock.badFitCooldown - dt);
+      flock.bright = Math.max(0, flock.bright - dt * 1.2);
+      flock.snapImpulse = Math.max(0, flock.snapImpulse - dt * 1.7);
+      if (scanTimer > 0 && flock.outboundDone && flock.reversed && !flock.returnDone) flock.scannedReturn = true;
+
+      const extra = Math.sin(worldTime * 1.3 + flock.wing) * 0.003 * finalRush();
+      flock.progress += flock.dir * (flock.speed + extra) * dt;
+      const pos = flockPosition(flock);
+      const preview = flockPosition(flock, flock.progress + 0.002 * flock.dir);
+      flock.x = clamp(pos.x, arena.x + 24, arena.x + arena.w - 24);
+      flock.y = pos.y;
+      flock.heading = Math.atan2(preview.y - pos.y, preview.x - pos.x);
+      flock.trail.push({ x: flock.x, y: flock.y, a: 0.7 + flock.bright * 0.3 });
+      if (flock.trail.length > 16) flock.trail.shift();
+
+      if (!flock.reversed && (flock.progress >= 1 || flock.progress <= 0)) {
+        if (flock.outboundDone) {
+          flock.reversed = true;
+          flock.dir *= -1;
+          flock.progress = clamp(flock.progress, 0, 1);
+          flock.lastTrack = -1;
+          addParticles(flock.x, flock.y, "#b9f6ff", 10, 90);
+        } else {
+          penaltyFlock(flock, "Missed the reversal setup.", -35);
+          scoreDelta(-50, flock.x, flock.y - 30, "#ff6b63");
+          collapse += 1;
+          flock.remove = true;
+          addParticles(flock.x, flock.y, "#ff6b63", 12, 110);
+          addMessage("Unstamped flock escaped.", 0.95);
+          continue;
+        }
+      }
+
+      if (flock.reversed && (flock.progress < -0.08 || flock.progress > 1.08)) {
+        if (!flock.returnDone) {
+          scoreDelta(-50, flock.x, flock.y - 24, "#ff6b63");
+          collapse += 1;
+          addMessage("Return leg drifted out.", 0.95);
+        }
+        flock.remove = true;
+        continue;
+      }
+
+      for (const gate of gates) {
+        const crossing = Math.abs(flock.y - gate.y) < 12;
+        if (!crossing) continue;
+        const fitRange = gate.width * 0.5 + 24 + (flock.size === gate.size ? 10 : 0);
+        if (Math.abs(flock.x - gate.x) <= fitRange) registerGateCheck(flock, gate);
+      }
+    }
+
+    for (let i = flocks.length - 1; i >= 0; i--) {
+      if (flocks[i].remove) flocks.splice(i, 1);
+    }
+  }
+
+  function updateSnaps(dt) {
+    for (const snap of snaps) {
+      snap.timer -= dt;
+      snap.flash += dt * 8;
+      if (snap.timer <= 0) {
+        bursts.push({
+          x: snap.x,
+          y: snap.y,
+          radius: snap.radius,
+          life: 0.32,
+          maxLife: 0.32,
+          polarity: snap.polarity,
+          power: snap.power
+        });
+        applyBurst(snap);
+        shake = Math.max(shake, 8 * snap.power);
+        addParticles(snap.x, snap.y, snap.polarity === "INSTEP" ? "#86f0ff" : "#ffae8a", 22, 180);
+        snap.remove = true;
+      }
+    }
+    for (let i = snaps.length - 1; i >= 0; i--) {
+      if (snaps[i].remove) snaps.splice(i, 1);
+    }
+
+    for (const burst of bursts) burst.life -= dt;
+    for (let i = bursts.length - 1; i >= 0; i--) {
+      if (bursts[i].life <= 0) bursts.splice(i, 1);
+    }
+  }
+
+  function updateParticles(dt) {
+    for (const p of particles) {
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      p.life -= dt;
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      if (particles[i].life <= 0) particles.splice(i, 1);
+    }
+
+    for (const p of popups) {
+      p.life -= dt;
+      p.y -= 24 * dt;
+    }
+    for (let i = popups.length - 1; i >= 0; i--) {
+      if (popups[i].life <= 0) popups.splice(i, 1);
+    }
+
+    for (const ring of scanRings) ring.life -= dt;
+    for (let i = scanRings.length - 1; i >= 0; i--) {
+      if (scanRings[i].life <= 0) scanRings.splice(i, 1);
+    }
+  }
+
+  function updatePlay(dt) {
+    worldTime += dt;
+    stateTimer += dt;
+    runTime = Math.max(0, runTime - dt);
+    shake = Math.max(0, shake - dt * 18);
+    scanCooldown = Math.max(0, scanCooldown - dt);
+
+    const moveX = (keys.has("arrowright") || keys.has("d") ? 1 : 0) - (keys.has("arrowleft") || keys.has("a") ? 1 : 0);
+    const moveY = (keys.has("arrowdown") || keys.has("s") ? 1 : 0) - (keys.has("arrowup") || keys.has("w") ? 1 : 0);
+    const length = Math.hypot(moveX, moveY) || 1;
+    reticle.x += moveX / length * reticle.speed * dt;
+    reticle.y += moveY / length * reticle.speed * dt;
+    reticle.x = clamp(reticle.x, arena.x + 18, arena.x + arena.w - 18);
+    reticle.y = clamp(reticle.y, arena.y + 18, arena.y + arena.h - 18);
+
+    if (keys.has(" ")) charge = Math.min(1.35, charge + dt);
+
+    if (scanTimer > 0) {
+      scanTimer = Math.max(0, scanTimer - dt);
+      const scanRate = 0.115 + finalRush() * 0.13;
+      citation = Math.min(1, citation + dt * scanRate);
+    }
+
+    const desiredCount = 5 + Math.floor(difficulty() * 5) + Math.floor(finalRush() * 3);
+    spawnTimer -= dt;
+    if (spawnTimer <= 0 && flocks.length < desiredCount + 2) {
+      spawnFlock(rng.pick([1, -1]));
+      spawnTimer = rng.range(1.4 - difficulty() * 0.55, 2.2 - difficulty() * 0.75);
+      if (finalRush()) spawnTimer *= 0.7;
+    }
+
+    updateGates(dt);
+    updateFlocks(dt);
+    updateSnaps(dt);
+    updateParticles(dt);
+
+    if (citation >= 1) endRun("Regulators shut the kiosk down.");
+    else if (collapse >= 5) endRun("Flyway collapse.");
+    else if (runTime <= 0) endRun("Shift complete.");
+
+    if (messageTimer > 0) messageTimer = Math.max(0, messageTimer - dt);
+  }
+
+  function drawBackground() {
+    ctx.save();
+    ctx.fillStyle = "#071019";
+    ctx.fillRect(0, 0, W, H);
+
+    const grad = ctx.createLinearGradient(0, arena.y, 0, arena.y + arena.h);
+    grad.addColorStop(0, "rgba(16, 40, 56, 0.96)");
+    grad.addColorStop(0.46, "rgba(9, 22, 30, 0.98)");
+    grad.addColorStop(0.54, "rgba(12, 32, 36, 0.98)");
+    grad.addColorStop(1, "rgba(14, 34, 52, 0.96)");
+    ctx.fillStyle = grad;
+    roundRect(ctx, arena.x, arena.y, arena.w, arena.h, 28);
+    ctx.fill();
+
+    const bandTop = arena.y + arena.h * 0.32;
+    const bandBottom = arena.y + arena.h * 0.68;
+    const cloud = ctx.createLinearGradient(0, bandTop, 0, bandBottom);
+    cloud.addColorStop(0, "rgba(118, 246, 255, 0.03)");
+    cloud.addColorStop(0.5, "rgba(153, 255, 196, 0.08)");
+    cloud.addColorStop(1, "rgba(118, 246, 255, 0.03)");
+    ctx.fillStyle = cloud;
+    ctx.fillRect(arena.x + 8, bandTop, arena.w - 16, bandBottom - bandTop);
+
+    ctx.strokeStyle = "rgba(176, 228, 244, 0.12)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 12; i++) {
+      const y = arena.y + 54 + i * 52;
+      ctx.beginPath();
+      ctx.moveTo(arena.x + 22, y);
+      for (let x = arena.x + 22; x <= arena.x + arena.w - 22; x += 28) {
+        const wobble = Math.sin(worldTime * 0.6 + i * 0.8 + x * 0.01) * (i > 4 && i < 8 ? 8 + difficulty() * 11 : 3);
+        ctx.lineTo(x, y + wobble);
+      }
+      ctx.stroke();
+    }
+
+    ctx.strokeStyle = "rgba(176, 228, 244, 0.1)";
+    for (let i = 0; i < 18; i++) {
+      const x = arena.x + 36 + i * 58;
+      ctx.beginPath();
+      ctx.moveTo(x, arena.y + 12);
+      ctx.lineTo(x, arena.y + 28);
+      ctx.moveTo(x, arena.y + arena.h - 12);
+      ctx.lineTo(x, arena.y + arena.h - 28);
+      ctx.stroke();
+    }
+
+    drawPoleLabel("ARCTIC", poleTop - 28);
+    drawPoleLabel("ANTARCTIC", poleBottom + 38);
+    ctx.restore();
+  }
+
+  function drawPoleLabel(text, y) {
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.font = "700 26px Georgia";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.9)";
+    ctx.shadowBlur = 16;
+    ctx.shadowColor = "rgba(185, 246, 255, 0.5)";
+    ctx.fillText(text, centerX, y);
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = "rgba(185, 246, 255, 0.34)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(arena.x + 120, y + 8);
+    ctx.lineTo(arena.x + arena.w - 120, y + 8);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawGate(gate, visibleAlpha) {
+    const alpha = Math.max(visibleAlpha, gate.afterglow * (difficulty() > 0.66 ? 0.5 : 0));
+    if (alpha <= 0.01) return;
+    ctx.save();
+    ctx.translate(gate.x, gate.y);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = sizeColors[gate.size];
+    ctx.lineWidth = 2 + gate.flash * 3;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = "rgba(124, 255, 179, 0.35)";
+    ctx.beginPath();
+    ctx.moveTo(-gate.width * 0.38, -gate.height * 0.48);
+    ctx.bezierCurveTo(-gate.width * 0.58, -gate.height * 0.56, -gate.width * 0.68, gate.height * 0.08, -gate.width * 0.28, gate.height * 0.34);
+    ctx.bezierCurveTo(gate.width * 0.02, gate.height * 0.54, gate.width * 0.48, gate.height * 0.54, gate.width * 0.58, 0);
+    ctx.bezierCurveTo(gate.width * 0.66, -gate.height * 0.42, gate.width * 0.12, -gate.height * 0.58, -gate.width * 0.38, -gate.height * 0.48);
+    ctx.stroke();
+
+    ctx.font = "700 13px Georgia";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(220, 255, 240, 0.9)";
+    ctx.fillText(sizeNames[gate.size], 0, -gate.height - 8);
+    ctx.restore();
+  }
+
+  function drawFlock(flock) {
+    ctx.save();
+    for (let i = 1; i < flock.trail.length; i++) {
+      const a = flock.trail[i - 1];
+      const b = flock.trail[i];
+      ctx.strokeStyle = "rgba(173, 233, 255, " + (0.05 + i / flock.trail.length * 0.18) + ")";
+      ctx.lineWidth = i / flock.trail.length * 3.8;
+      ctx.beginPath();
+      ctx.moveTo(a.x, a.y);
+      ctx.lineTo(b.x, b.y);
+      ctx.stroke();
+    }
+
+    ctx.translate(flock.x, flock.y);
+    ctx.rotate(flock.heading + Math.sin(worldTime * 10 + flock.wing) * 0.08);
+    const glow = 10 + flock.bright * 20 + flock.snapImpulse * 18;
+    ctx.shadowBlur = glow;
+    ctx.shadowColor = flock.outboundDone ? "rgba(124, 255, 179, 0.5)" : "rgba(185, 246, 255, 0.35)";
+    ctx.fillStyle = flock.outboundDone ? "rgba(226, 255, 242, 0.98)" : "rgba(244, 251, 255, 0.95)";
+    ctx.beginPath();
+    ctx.moveTo(16, 0);
+    ctx.lineTo(-8, -5);
+    ctx.lineTo(-2, 0);
+    ctx.lineTo(-8, 5);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.globalAlpha = 0.76;
+    ctx.strokeStyle = sizeColors[flock.size];
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(-6, -9);
+    ctx.lineTo(10, 0);
+    ctx.lineTo(-6, 9);
+    ctx.stroke();
+
+    if (scanTimer > 0) {
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = "rgba(124, 255, 179, 0.95)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(-1, 0, 8, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.font = "700 10px Georgia";
+      ctx.fillStyle = sizeColors[flock.size];
+      ctx.textAlign = "center";
+      ctx.fillText(sizeNames[flock.size], 0, -14);
+    }
+    ctx.restore();
+  }
+
+  function drawSnap(snap) {
+    ctx.save();
+    ctx.translate(snap.x, snap.y);
+    const pulse = 1 + Math.sin(snap.flash * 8) * 0.08;
+    ctx.scale(pulse, pulse);
+    ctx.strokeStyle = snap.polarity === "INSTEP" ? "#86f0ff" : "#ffb28d";
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = snap.polarity === "INSTEP" ? "rgba(134, 240, 255, 0.55)" : "rgba(255, 178, 141, 0.5)";
+    ctx.beginPath();
+    ctx.arc(0, 0, snap.radius * 0.22, 0, Math.PI * 2);
+    ctx.stroke();
+    for (let i = -1; i <= 1; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-26, i * 8);
+      ctx.lineTo(-6, i * 8);
+      ctx.lineTo(6, i * 3);
+      ctx.lineTo(26, i * 3);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawBurst(burst) {
+    const t = 1 - burst.life / burst.maxLife;
+    ctx.save();
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = burst.polarity === "INSTEP" ? "#86f0ff" : "#ffb28d";
+    ctx.lineWidth = 4 * (1 - t);
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = burst.polarity === "INSTEP" ? "rgba(134, 240, 255, 0.6)" : "rgba(255, 178, 141, 0.6)";
+    ctx.beginPath();
+    ctx.arc(burst.x, burst.y, lerp(12, burst.radius, easeOut(t)), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.save();
+      ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(p.x, p.y, 2.2, 2.2);
+      ctx.restore();
+    }
+    for (const p of popups) {
+      ctx.save();
+      ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+      ctx.textAlign = "center";
+      ctx.font = "700 18px Georgia";
+      ctx.fillStyle = p.color;
+      ctx.fillText(p.text, p.x, p.y);
+      ctx.restore();
+    }
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(7, 16, 24, 0.78)";
+    roundRect(ctx, arena.x + 18, 18, 340, 122, 18);
+    ctx.fill();
+    roundRect(ctx, arena.x + arena.w - 286, 18, 268, 122, 18);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(239, 249, 255, 0.9)";
+    ctx.font = "700 19px Georgia";
+    ctx.fillText("SCORE  " + String(Math.floor(score)).padStart(4, "0"), arena.x + 38, 48);
+    ctx.fillText("TIME  " + runTime.toFixed(1), arena.x + 38, 76);
+    ctx.fillText("POLARITY  " + polarity, arena.x + 38, 104);
+
+    meter(arena.x + 178, 58, 150, 12, citation, "#ff6b63", "CITATION");
+    meter(arena.x + 178, 96, 150, 12, collapse / 5, "#ffb28d", "COLLAPSE");
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.9)";
+    ctx.fillText("SCAN", arena.x + arena.w - 262, 48);
+    ctx.fillText("CHARGE", arena.x + arena.w - 262, 88);
+    meter(arena.x + arena.w - 190, 37, 146, 13, scanTimer, "#7cffb3", "");
+    meter(arena.x + arena.w - 190, 77, 146, 13, clamp(charge / 1.35, 0, 1), polarity === "INSTEP" ? "#86f0ff" : "#ffb28d", "");
+
+    ctx.font = "700 14px Georgia";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.7)";
+    ctx.fillText("Bands: NARROW / MID / WIDE", arena.x + arena.w - 262, 118);
+    ctx.restore();
+  }
+
+  function meter(x, y, w, h, value, color, label) {
+    ctx.save();
+    if (label) {
+      ctx.font = "700 12px Georgia";
+      ctx.fillStyle = "rgba(239, 249, 255, 0.68)";
+      ctx.fillText(label, x, y - 8);
+    }
+    ctx.fillStyle = "rgba(255, 255, 255, 0.06)";
+    roundRect(ctx, x, y, w, h, h / 2);
+    ctx.fill();
+    ctx.fillStyle = color;
+    roundRect(ctx, x, y, w * clamp(value, 0, 1), h, h / 2);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.14)";
+    ctx.lineWidth = 1;
+    roundRect(ctx, x, y, w, h, h / 2);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawReticle() {
+    ctx.save();
+    ctx.translate(reticle.x, reticle.y);
+    ctx.strokeStyle = polarity === "INSTEP" ? "#86f0ff" : "#ffb28d";
+    ctx.lineWidth = 2;
+    ctx.shadowBlur = 18;
+    ctx.shadowColor = polarity === "INSTEP" ? "rgba(134, 240, 255, 0.45)" : "rgba(255, 178, 141, 0.45)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 18 + charge * 8, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-28, 0);
+    ctx.lineTo(-10, 0);
+    ctx.moveTo(28, 0);
+    ctx.lineTo(10, 0);
+    ctx.moveTo(0, -28);
+    ctx.lineTo(0, -10);
+    ctx.moveTo(0, 28);
+    ctx.lineTo(0, 10);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawOverlay() {
+    if (scanTimer > 0) {
+      ctx.save();
+      ctx.fillStyle = "rgba(110, 255, 160, 0.09)";
+      ctx.fillRect(arena.x, arena.y, arena.w, arena.h);
+      ctx.strokeStyle = "rgba(124, 255, 179, 0.22)";
+      for (let i = 0; i < 16; i++) {
+        const y = arena.y + i * 44 + (worldTime * 70 % 44);
+        ctx.beginPath();
+        ctx.moveTo(arena.x + 6, y);
+        ctx.lineTo(arena.x + arena.w - 6, y);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for (const ring of scanRings) {
+      ctx.save();
+      ctx.globalAlpha = ring.life / ring.maxLife * 0.35;
+      ctx.strokeStyle = "#7cffb3";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(reticle.x, reticle.y, 30 + (1 - ring.life / ring.maxLife) * 420, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    if (messageTimer > 0) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, messageTimer);
+      ctx.textAlign = "center";
+      ctx.font = "700 22px Georgia";
+      ctx.fillStyle = "rgba(255, 242, 201, 0.95)";
+      ctx.fillText(message, centerX, arena.y + 38);
+      ctx.restore();
+    }
+  }
+
+  function drawTitleScreen() {
+    drawBackground();
+    ctx.save();
+    ctx.textAlign = "center";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.96)";
+    ctx.font = "700 58px Georgia";
+    ctx.fillText("Pole to Sole", centerX, 218);
+    ctx.font = "italic 23px Georgia";
+    ctx.fillStyle = "rgba(220, 240, 245, 0.84)";
+    ctx.fillText("Illegal migratory shoe-fitting between the poles", centerX, 254);
+
+    roundRect(ctx, centerX - 360, 312, 720, 268, 28);
+    ctx.fillStyle = "rgba(7, 16, 24, 0.72)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(185, 246, 255, 0.16)";
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    ctx.textAlign = "left";
+    ctx.font = "700 22px Georgia";
+    ctx.fillStyle = "rgba(255, 247, 216, 0.96)";
+    ctx.fillText("Run the route:", centerX - 320, 358);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.88)";
+    ctx.fillText("Guide terns through invisible shoe gates, reverse them at the far pole,", centerX - 320, 396);
+    ctx.fillText("then fit them again on the return leg before the regulators notice.", centerX - 320, 424);
+
+    ctx.fillStyle = "rgba(124, 255, 179, 0.94)";
+    ctx.fillText("X  Scan for one second. Hidden gates and flock size bands appear.", centerX - 320, 472);
+    ctx.fillStyle = "rgba(134, 240, 255, 0.94)";
+    ctx.fillText("Space  Hold to charge, release to plant a delayed INSTEP / HEEL snap.", centerX - 320, 504);
+    ctx.fillStyle = "rgba(255, 178, 141, 0.94)";
+    ctx.fillText("Z  Toggle polarity. INSTEP pulls inward, HEEL flares outward.", centerX - 320, 536);
+
+    ctx.textAlign = "center";
+    ctx.font = "700 28px Georgia";
+    ctx.fillStyle = "rgba(255, 210, 122, 0.98)";
+    ctx.fillText("Press Space or Enter to Open the Kiosk", centerX, 654);
+    ctx.restore();
+  }
+
+  function drawGameOver() {
+    drawBackground();
+    for (const gate of gates) drawGate(gate, 0.18);
+    for (const flock of flocks) drawFlock(flock);
+    ctx.save();
+    ctx.fillStyle = "rgba(4, 9, 14, 0.7)";
+    ctx.fillRect(0, 0, W, H);
+    roundRect(ctx, centerX - 275, 210, 550, 300, 28);
+    ctx.fillStyle = "rgba(7, 16, 24, 0.9)";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.12)";
+    ctx.stroke();
+    ctx.textAlign = "center";
+    ctx.font = "700 54px Georgia";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.96)";
+    ctx.fillText(finalReason === "Shift complete." ? "Shift Over" : "Kiosk Closed", centerX, 282);
+    ctx.font = "italic 24px Georgia";
+    ctx.fillStyle = "rgba(255, 236, 190, 0.92)";
+    ctx.fillText(finalReason, centerX, 320);
+    ctx.font = "700 30px Georgia";
+    ctx.fillStyle = "rgba(124, 255, 179, 0.96)";
+    ctx.fillText("Score  " + Math.floor(score), centerX, 386);
+    ctx.fillStyle = "rgba(185, 246, 255, 0.9)";
+    ctx.fillText("Best  " + Math.floor(bestScore), centerX, 426);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(239, 249, 255, 0.8)";
+    ctx.fillText("Full migration: +150   Outbound: +40   Return: +60   Blind trust: +30", centerX, 468);
+    ctx.fillText("Press Space or Enter to run another illegal fitting shift.", centerX, 514);
+    ctx.restore();
+  }
+
+  function drawPlay() {
+    drawBackground();
+    const offsetX = shake ? rng.range(-shake, shake) : 0;
+    const offsetY = shake ? rng.range(-shake, shake) : 0;
+    ctx.save();
+    ctx.translate(offsetX, offsetY);
+    for (const gate of gates) drawGate(gate, scanTimer > 0 ? 0.95 : 0);
+    for (const burst of bursts) drawBurst(burst);
+    for (const snap of snaps) drawSnap(snap);
+    for (const flock of flocks) drawFlock(flock);
+    drawParticles();
+    drawReticle();
+    ctx.restore();
+    drawHud();
+    drawOverlay();
+  }
+
+  function roundRect(context, x, y, w, h, r) {
+    context.beginPath();
+    context.moveTo(x + r, y);
+    context.arcTo(x + w, y, x + w, y + h, r);
+    context.arcTo(x + w, y + h, x, y + h, r);
+    context.arcTo(x, y + h, x, y, r);
+    context.arcTo(x, y, x + w, y, r);
+    context.closePath();
+  }
+
+  function frame() {
+    if (state === "title") drawTitleScreen();
+    else if (state === "play") drawPlay();
+    else drawGameOver();
+  }
+
+  function handlePress(key) {
+    if ((state === "title" || state === "gameover") && (key === " " || key === "enter")) {
+      startRun();
+      return;
+    }
+    if (state !== "play") return;
+    if (key === "x") activateScan();
+    if (key === "z") polarity = polarity === "INSTEP" ? "HEEL" : "INSTEP";
+  }
+
+  window.addEventListener("keydown", event => {
+    const key = event.key.toLowerCase();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "enter", "x", "z"].includes(key)) event.preventDefault();
+    if (!keys.has(key)) pressed.add(key);
+    keys.add(key);
+    handlePress(key);
+  });
+
+  window.addEventListener("keyup", event => {
+    const key = event.key.toLowerCase();
+    keys.delete(key);
+    if (key === " " && state === "play" && charge > 0.05) {
+      plantSnap();
+      charge = 0;
+    }
+  });
+
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    if (state === "play") updatePlay(dt);
+    else {
+      worldTime += dt;
+      stateTimer += dt;
+      updateGates(dt);
+      updateParticles(dt);
+    }
+    frame();
+    pressed.clear();
+    requestAnimationFrame(loop);
+  }
+
+  gates.push(createGate(0, 0.3));
+  gates.push(createGate(1, 2.1));
+  gates.push(createGate(2, 4.2));
+  for (let i = 0; i < 3; i++) spawnFlock(i % 2 ? -1 : 1, true);
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
