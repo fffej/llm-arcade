@@ -1,3 +1,9 @@
+---
+layout: default
+title: Handle With Suspicion
+description: Game 01 design spec for Handle With Suspicion.
+---
+
 # Handle With Suspicion
 
 ## **Title**

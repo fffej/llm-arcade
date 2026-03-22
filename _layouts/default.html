@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+    <meta name="description" content="{{ page.description | default: site.description }}">
+    <link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+    {% seo %}
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="site-header">
+        <a class="site-brand" href="{{ '/' | relative_url }}">Weird &amp; Wacky Arcade</a>
+        <nav class="site-nav">
+          <a href="{{ '/games/' | relative_url }}">Play Arcade</a>
+          <a href="{{ '/specs/' | relative_url }}">Browse Specs</a>
+          {% if site.github.repository_nwo %}
+          <a href="https://github.com/{{ site.github.repository_nwo }}">Repository</a>
+          {% endif %}
+        </nav>
+      </header>
+
+      <main class="content">
+        {% assign spec_stem = page.path | split: '/' | last | split: '.' | first %}
+        {% if page.path contains 'specs/game-' %}
+        <div class="callout">
+          Play this game:
+          <a href="{{ '/games/' | append: spec_stem | append: '.html' | relative_url }}">{{ spec_stem }}.html</a>
+          or go back to the <a href="{{ '/specs/' | relative_url }}">spec index</a>.
+        </div>
+        {% endif %}
+        {{ content }}
+      </main>
+    </div>
+  </body>
+</html>

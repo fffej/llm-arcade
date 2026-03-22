@@ -1,0 +1,255 @@
+:root {
+  --bg: #08111f;
+  --bg-alt: #0f1f36;
+  --panel: rgba(10, 22, 40, 0.82);
+  --panel-strong: rgba(15, 31, 54, 0.92);
+  --line: rgba(138, 189, 255, 0.22);
+  --text: #ecf3ff;
+  --muted: #b3c4de;
+  --accent: #ffd166;
+  --accent-2: #7ae582;
+  --accent-3: #6ec6ff;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text);
+  background:
+    radial-gradient(circle at top, rgba(110, 198, 255, 0.18), transparent 36%),
+    radial-gradient(circle at 80% 20%, rgba(255, 209, 102, 0.14), transparent 24%),
+    linear-gradient(180deg, #07101d 0%, #0b1728 48%, #08111f 100%);
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1.65;
+}
+
+a {
+  color: var(--accent);
+}
+
+a:hover {
+  color: #fff0bf;
+}
+
+.page-shell {
+  width: min(1100px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 24px 0 48px;
+}
+
+.site-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+  margin-bottom: 32px;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--shadow);
+}
+
+.site-brand {
+  color: var(--text);
+  text-decoration: none;
+  font-size: 1.1rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.site-nav {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.site-nav a {
+  text-decoration: none;
+}
+
+.content {
+  display: grid;
+  gap: 24px;
+}
+
+.hero,
+.panel,
+.spec-grid a,
+.cta-card {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.hero {
+  padding: 32px;
+  background:
+    linear-gradient(135deg, rgba(255, 209, 102, 0.08), transparent 44%),
+    linear-gradient(160deg, rgba(122, 229, 130, 0.12), transparent 52%),
+    var(--panel-strong);
+}
+
+.hero h1,
+.panel h1,
+.panel h2,
+.spec-doc h1:first-child {
+  margin-top: 0;
+  line-height: 1.1;
+}
+
+.hero h1 {
+  font-size: clamp(2.3rem, 5vw, 4.6rem);
+  margin-bottom: 12px;
+}
+
+.hero p {
+  max-width: 58rem;
+  font-size: 1.1rem;
+  color: var(--muted);
+}
+
+.button-row {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.button {
+  display: inline-block;
+  padding: 12px 18px;
+  border-radius: 999px;
+  text-decoration: none;
+  font-weight: 700;
+}
+
+.button-primary {
+  background: linear-gradient(135deg, var(--accent), #ff9f1c);
+  color: #0f1723;
+}
+
+.button-secondary {
+  background: rgba(110, 198, 255, 0.12);
+  color: var(--text);
+  border: 1px solid rgba(110, 198, 255, 0.28);
+}
+
+.panel {
+  padding: 24px 28px;
+}
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 16px;
+}
+
+.stat {
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.stat strong {
+  display: block;
+  font-size: 1.8rem;
+  color: var(--accent-2);
+}
+
+.spec-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 18px;
+}
+
+.spec-grid a,
+.cta-card {
+  display: block;
+  padding: 20px;
+  color: var(--text);
+  text-decoration: none;
+}
+
+.spec-grid a:hover,
+.cta-card:hover {
+  transform: translateY(-2px);
+  border-color: rgba(255, 209, 102, 0.45);
+}
+
+.spec-grid strong,
+.cta-card strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 1.05rem;
+}
+
+.eyebrow {
+  display: inline-block;
+  margin-bottom: 10px;
+  color: var(--accent-3);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 0.75rem;
+}
+
+.spec-doc {
+  padding: 28px 32px;
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow);
+}
+
+.spec-doc p,
+.spec-doc li {
+  color: var(--muted);
+}
+
+.spec-doc h1,
+.spec-doc h2,
+.spec-doc h3,
+.spec-doc strong {
+  color: var(--text);
+}
+
+.spec-doc code {
+  padding: 0.1rem 0.35rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 0.95em;
+}
+
+.callout {
+  margin-bottom: 20px;
+  padding: 16px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 209, 102, 0.28);
+  background: rgba(255, 209, 102, 0.08);
+}
+
+@media (max-width: 720px) {
+  .site-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .hero,
+  .panel,
+  .spec-doc {
+    padding: 22px;
+  }
+}
+

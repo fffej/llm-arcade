@@ -1,3 +1,9 @@
+---
+layout: default
+title: Bill, Bowl, Bluff
+description: Game 10 design spec for Bill, Bowl, Bluff.
+---
+
 # Bill, Bowl, Bluff
 
 ## **Title**

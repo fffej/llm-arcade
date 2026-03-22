@@ -1,3 +1,9 @@
+---
+layout: default
+title: Loogie Loop
+description: Game 06 design spec for Loogie Loop.
+---
+
 # Loogie Loop
 
 ## **Title**

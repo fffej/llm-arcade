@@ -1,0 +1,8 @@
+title: Weird & Wacky Arcade
+description: AI-generated browser games and their design specs
+markdown: kramdown
+kramdown:
+  input: GFM
+plugins:
+  - jekyll-seo-tag
+

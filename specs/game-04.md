@@ -1,3 +1,9 @@
+---
+layout: default
+title: Pole to Sole
+description: Game 04 design spec for Pole to Sole.
+---
+
 # Pole to Sole
 
 ## **Title**

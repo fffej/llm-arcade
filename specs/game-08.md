@@ -1,3 +1,9 @@
+---
+layout: default
+title: Shade Signal Panic
+description: Game 08 design spec for Shade Signal Panic.
+---
+
 # Shade Signal Panic
 
 ## **Title**

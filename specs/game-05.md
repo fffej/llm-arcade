@@ -1,3 +1,9 @@
+---
+layout: default
+title: Split Decision Playa
+description: Game 05 design spec for Split Decision Playa.
+---
+
 # Split Decision Playa
 
 ## **Title**

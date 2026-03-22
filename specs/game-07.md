@@ -1,3 +1,9 @@
+---
+layout: default
+title: Waggle Switchback
+description: Game 07 design spec for Waggle Switchback.
+---
+
 # Waggle Switchback
 
 ## **Title**

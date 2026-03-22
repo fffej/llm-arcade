@@ -1,3 +1,9 @@
+---
+layout: default
+title: Monotreme Fever
+description: Game 02 design spec for Monotreme Fever.
+---
+
 # Monotreme Fever
 
 ## **Title**

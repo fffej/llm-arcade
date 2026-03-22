@@ -1,3 +1,9 @@
+---
+layout: default
+title: Night Raft Raid
+description: Game 03 design spec for Night Raft Raid.
+---
+
 # Night Raft Raid
 
 ## **Title**
