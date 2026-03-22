@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Waggle Switchback</title>
+<style>
+  :root {
+    --bg0: #1a1108;
+    --bg1: #3a2412;
+    --bg2: #6b4318;
+    --ink: #fff4dd;
+    --muted: rgba(255, 244, 221, 0.72);
+    --gold: #f6bb43;
+    --amber: #ffde76;
+    --honey: #f0932a;
+    --wax: #fff0b8;
+    --chalk: rgba(255, 247, 224, 0.9);
+    --shadow: rgba(10, 4, 2, 0.58);
+    --danger: #ff6f59;
+    --bird: #100d0d;
+    --panel: rgba(28, 14, 8, 0.78);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+    background:
+      radial-gradient(circle at 50% 0%, rgba(255, 214, 92, 0.12), transparent 28%),
+      radial-gradient(circle at 16% 12%, rgba(255, 184, 76, 0.12), transparent 18%),
+      linear-gradient(180deg, #130c07 0%, #29170d 40%, #120905 100%);
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    position: relative;
+    width: min(1360px, 100%);
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    color: var(--ink);
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 999px;
+    background: rgba(25, 13, 7, 0.84);
+    border: 1px solid rgba(255, 244, 221, 0.18);
+    backdrop-filter: blur(8px);
+    letter-spacing: 0.04em;
+    font-size: 14px;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(255, 222, 118, 0.8);
+    color: var(--amber);
+  }
+
+  .frame { padding-top: 54px; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(255, 244, 221, 0.1);
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.48),
+      inset 0 0 120px rgba(255, 224, 130, 0.05);
+    background:
+      radial-gradient(circle at 50% 32%, rgba(255, 224, 149, 0.05), transparent 23%),
+      linear-gradient(180deg, rgba(104, 64, 29, 0.94), rgba(34, 19, 10, 0.98));
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; line-height: 1.5; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="900" aria-label="Waggle Switchback"></canvas>
+      <div class="note">Left/Right rotate waggle by 45°. Up = SHORT, Down = LONG, Space = broadcast, Shift = HUSH for 1 second.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const CX = W * 0.5;
+  const CY = H * 0.54;
+  const OUTER_RADIUS = 332;
+  const INNER_RADIUS = 238;
+  const DECISION_RADIUS = 172;
+  const HIVE_RADIUS = 52;
+  const RAIL_COUNT = 6;
+  const RAIL_STEP = Math.PI * 2 / RAIL_COUNT;
+  const ANGLE_STEP = Math.PI / 4;
+  const MAX_CONFUSION = 100;
+  const MAX_HIVE_CHARGE = 6;
+
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const normalizeAngle = (a) => {
+    while (a < -Math.PI) a += Math.PI * 2;
+    while (a > Math.PI) a -= Math.PI * 2;
+    return a;
+  };
+  const angleTo = (x, y) => Math.atan2(y - CY, x - CX);
+  const quadIndex = (angle) => Math.floor(((normalizeAngle(angle) + Math.PI) / (Math.PI / 2))) & 3;
+
+  const railAngles = Array.from({ length: RAIL_COUNT }, (_, i) => -Math.PI / 2 + i * RAIL_STEP);
+  const switchMap = [1, 0, -1, 1, 0, -1];
+  const sectors = railAngles.map((angle, i) => ({
+    index: i,
+    angle,
+    inner: pointAt(angle, INNER_RADIUS),
+    outer: pointAt(angle, OUTER_RADIUS),
+    decision: pointAt(angle, DECISION_RADIUS)
+  }));
+
+  function pointAt(angle, radius) {
+    return { x: CX + Math.cos(angle) * radius, y: CY + Math.sin(angle) * radius };
+  }
+
+  function nearestRailIndex(angle) {
+    let best = 0;
+    let bestDist = Infinity;
+    for (let i = 0; i < RAIL_COUNT; i += 1) {
+      const d = Math.abs(normalizeAngle(angle - railAngles[i]));
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  function routeFromOffset(sunAngle, offset) {
+    return nearestRailIndex(sunAngle + offset);
+  }
+
+  function moduloRail(index) {
+    return (index + RAIL_COUNT) % RAIL_COUNT;
+  }
+
+  function formatOffset(offset) {
+    const degrees = Math.round((offset * 180 / Math.PI) / 45) * 45;
+    return `${degrees >= 0 ? "+" : ""}${degrees}°`;
+  }
+
+  let screen = "title";
+  let lastTime = 0;
+  let runTime = 0;
+  let timeLeft = 60;
+  let score = 0;
+  let best = Number(localStorage.getItem("waggle-switchback-best") || 0);
+  let confusion = 0;
+  let sunAngle = -Math.PI / 2;
+  let sunSpeed = 0.24;
+  let plannedOffset = 0;
+  let plannedRange = "SHORT";
+  let hushTimer = 0;
+  let comboTimer = 0;
+  let comboQuadrant = -1;
+  let comboCount = 0;
+  let comboMultiplier = 1;
+  let hiveCharge = MAX_HIVE_CHARGE;
+  let hiveRecharge = 0;
+  let pulseText = "";
+  let pulseTextTimer = 0;
+  let endReason = "Time elapsed";
+
+  const flowers = [];
+  const bees = [];
+  const mimics = [];
+  const particles = [];
+  const popups = [];
+  const deliveries = [];
+
+  for (let sector = 0; sector < RAIL_COUNT; sector += 1) {
+    flowers.push(createFlower(sector, "SHORT"));
+    flowers.push(createFlower(sector, "LONG"));
+  }
+
+  function createFlower(sector, range) {
+    const radius = range === "SHORT" ? INNER_RADIUS : OUTER_RADIUS;
+    const pos = pointAt(railAngles[sector], radius);
+    return {
+      sector,
+      range,
+      bloom: false,
+      bloomPulse: rand(0, Math.PI * 2),
+      nectar: 0,
+      x: pos.x,
+      y: pos.y
+    };
+  }
+
+  function activeFlowersFor(stage) {
+    if (stage < 0.25) return 3;
+    if (stage < 0.55) return 4;
+    if (stage < 0.8) return 5;
+    return 6;
+  }
+
+  function activeMimicsFor(stage) {
+    if (stage < 0.33) return 1;
+    if (stage < 0.66) return 2;
+    return 3;
+  }
+
+  function resetRun() {
+    screen = "playing";
+    lastTime = 0;
+    runTime = 0;
+    timeLeft = 60;
+    score = 0;
+    confusion = 0;
+    sunAngle = -Math.PI / 2;
+    sunSpeed = 0.24;
+    plannedOffset = 0;
+    plannedRange = "SHORT";
+    hushTimer = 0;
+    comboTimer = 0;
+    comboQuadrant = -1;
+    comboCount = 0;
+    comboMultiplier = 1;
+    hiveCharge = MAX_HIVE_CHARGE;
+    hiveRecharge = 0;
+    pulseText = "";
+    pulseTextTimer = 0;
+    endReason = "Time elapsed";
+    bees.length = 0;
+    mimics.length = 0;
+    particles.length = 0;
+    popups.length = 0;
+    deliveries.length = 0;
+    for (const flower of flowers) {
+      flower.bloom = false;
+      flower.nectar = 0;
+      flower.bloomPulse = rand(0, Math.PI * 2);
+    }
+    activateBlooms(activeFlowersFor(0));
+    syncMimics(activeMimicsFor(0));
+  }
+
+  function activateBlooms(targetCount) {
+    const open = flowers.filter((f) => f.bloom);
+    while (open.length > targetCount) {
+      const flower = open.splice(Math.floor(Math.random() * open.length), 1)[0];
+      flower.bloom = false;
+      flower.nectar = 0;
+    }
+    const closed = flowers.filter((f) => !f.bloom);
+    while (open.length < targetCount && closed.length) {
+      const index = Math.floor(Math.random() * closed.length);
+      const flower = closed.splice(index, 1)[0];
+      flower.bloom = true;
+      flower.nectar = randInt(2, 4);
+      open.push(flower);
+    }
+  }
+
+  function syncMimics(targetCount) {
+    const slots = [0, 2, 4, 1, 3, 5];
+    while (mimics.length > targetCount) mimics.pop();
+    while (mimics.length < targetCount) {
+      const slot = slots[mimics.length];
+      const angle = railAngles[slot] + RAIL_STEP * 0.5;
+      const pos = pointAt(angle, OUTER_RADIUS + 42);
+      mimics.push({
+        slot,
+        angle,
+        x: pos.x,
+        y: pos.y,
+        pending: null,
+        activeSignal: null,
+        replayDelay: 0,
+        pulseTimer: 0,
+        pulseLife: 0,
+        cooldown: rand(0.1, 0.8),
+        replayId: 0
+      });
+    }
+  }
+
+  function setPulseText(text) {
+    pulseText = text;
+    pulseTextTimer = 1.2;
+  }
+
+  function addPopup(text, x, y, color = "#fff0b8") {
+    popups.push({ text, x, y, vy: -24, life: 1.2, color });
+  }
+
+  function addScore(base, x, y, label, color) {
+    score += base;
+    addPopup(`${label}${base >= 0 ? "+" : ""}${Math.round(base)}`, x, y, color);
+  }
+
+  function changeConfusion(amount, x, y) {
+    confusion = clamp(confusion + amount, 0, MAX_CONFUSION);
+    if (amount > 0) addPopup(`CONFUSION +${amount}`, x, y, "#ff8d73");
+  }
+
+  function stageProgress() {
+    return clamp(runTime / 60, 0, 1);
+  }
+
+  function scheduleReplay(offset, range) {
+    if (!mimics.length) return;
+    const available = mimics.filter((m) => m.cooldown <= 0 && !m.pending && m.pulseTimer <= 0);
+    const mimic = available.length ? pick(available) : pick(mimics);
+    const stage = stageProgress();
+    mimic.pending = { offset, range };
+    mimic.replayDelay = lerp(1.5, 0.5, stage) + rand(0, 0.35);
+    mimic.cooldown = lerp(1.4, 0.45, stage);
+    mimic.replayId += 1;
+  }
+
+  function launchWave() {
+    if (screen !== "playing" || hiveCharge < 1) return;
+    const stage = stageProgress();
+    const routeSector = routeFromOffset(sunAngle, plannedOffset);
+    const selectedFlower = flowers.find((f) => f.sector === routeSector && f.range === plannedRange);
+    const count = Math.max(1, Math.floor(hiveCharge));
+    hiveCharge = 0;
+    hiveRecharge = 0;
+    let launched = 0;
+    for (let i = 0; i < count; i += 1) {
+      bees.push({
+        x: CX + rand(-8, 8),
+        y: CY + rand(-8, 8),
+        phase: "outbound",
+        commandOffset: plannedOffset,
+        signalRange: plannedRange,
+        flowerSector: routeSector,
+        targetFlower: selectedFlower,
+        progress: 0,
+        wait: 0,
+        loaded: false,
+        returnLane: null,
+        intendedLane: null,
+        trail: [],
+        uplifted: false,
+        stolenHits: new Set(),
+        counterfeitReady: false,
+        counterfeitApplied: false,
+        lostReason: "",
+        hue: rand(0, 1),
+        stageSpeed: stage
+      });
+      launched += 1;
+    }
+    scheduleReplay(plannedOffset, plannedRange);
+    setPulseText(`${plannedRange} ${formatOffset(plannedOffset)} broadcast`);
+    if (!selectedFlower || !selectedFlower.bloom) {
+      setPulseText(`${plannedRange} ${formatOffset(plannedOffset)} into a dead-end`);
+    } else {
+      setPulseText(`${plannedRange} ${formatOffset(plannedOffset)} sent to rail ${routeSector + 1}`);
+    }
+  }
+
+  function handleDelivery(bee) {
+    const angle = angleTo(bee.x, bee.y);
+    const quadrant = quadIndex(angle);
+    if (hushTimer > 0) {
+      comboTimer = 0;
+      comboCount = 0;
+      comboMultiplier = 1;
+    } else {
+      if (comboTimer > 0 && quadrant === comboQuadrant) comboCount += 1;
+      else comboCount = 1;
+      comboQuadrant = quadrant;
+      comboTimer = 2.2;
+      comboMultiplier = comboCount >= 3 ? Math.min(4, 2 + (comboCount - 3) * 0.5) : 1;
+    }
+
+    const mult = hushTimer > 0 ? 1 : comboMultiplier;
+    addScore(100 * mult, bee.x, bee.y, "", "#fff0b8");
+    if (bee.uplifted) addScore(40, bee.x + 12, bee.y - 16, "UPHILL ", "#ffd266");
+    if (bee.counterfeitApplied) addScore(75, bee.x - 10, bee.y + 10, "COUNTERFEIT ", "#aee6ff");
+    particles.push({
+      type: "burst",
+      x: bee.x,
+      y: bee.y,
+      life: 1,
+      size: 16,
+      color: "#ffefb0"
+    });
+    deliveries.push({ quadrant, life: 1.6 });
+  }
+
+  function loseBee(bee, amount, reason) {
+    addScore(-50, bee.x, bee.y, "", "#ff8d73");
+    changeConfusion(amount, bee.x, bee.y + 16);
+    bee.phase = "gone";
+    bee.lostReason = reason;
+  }
+
+  function trapBee(bee, amount, reason) {
+    addScore(-35, bee.x, bee.y, "", "#ff8d73");
+    changeConfusion(amount, bee.x, bee.y + 16);
+    bee.phase = "gone";
+    bee.lostReason = reason;
+  }
+
+  function emitHush() {
+    if (screen !== "playing") return;
+    hushTimer = 1;
+    comboTimer = 0;
+    comboCount = 0;
+    comboMultiplier = 1;
+    setPulseText("HUSH engaged");
+  }
+
+  function updateGame(dt) {
+    runTime += dt;
+    timeLeft = Math.max(0, 60 - runTime);
+    const stage = stageProgress();
+    sunSpeed = runTime > 45 ? 0.56 : lerp(0.22, 0.42, stage);
+    sunAngle += sunSpeed * dt;
+
+    if (timeLeft <= 0) {
+      endReason = "Time elapsed";
+      endRun();
+      return;
+    }
+    if (confusion >= MAX_CONFUSION) {
+      endReason = "Confusion meter maxed";
+      endRun();
+      return;
+    }
+
+    const targetBlooms = activeFlowersFor(stage);
+    if (runTime > 45) {
+      if (Math.floor((runTime - dt) * 1.25) !== Math.floor(runTime * 1.25)) activateBlooms(targetBlooms);
+    } else if (Math.floor((runTime - dt) * 0.33) !== Math.floor(runTime * 0.33)) {
+      activateBlooms(targetBlooms);
+    }
+    syncMimics(activeMimicsFor(stage));
+
+    hiveRecharge += dt * 2.2;
+    if (hiveRecharge >= 1) {
+      hiveCharge = clamp(hiveCharge + Math.floor(hiveRecharge), 0, MAX_HIVE_CHARGE);
+      hiveRecharge %= 1;
+    }
+
+    hushTimer = Math.max(0, hushTimer - dt);
+    comboTimer = Math.max(0, comboTimer - dt);
+    if (comboTimer === 0 && hushTimer === 0) {
+      comboCount = 0;
+      comboMultiplier = 1;
+    }
+    pulseTextTimer = Math.max(0, pulseTextTimer - dt);
+
+    for (const flower of flowers) flower.bloomPulse += dt * (flower.range === "LONG" ? 1.4 : 1.1);
+
+    for (const mimic of mimics) {
+      mimic.cooldown = Math.max(0, mimic.cooldown - dt);
+      if (mimic.pending) {
+        mimic.replayDelay -= dt;
+        if (mimic.replayDelay <= 0) {
+          if (hushTimer <= 0) {
+            mimic.activeSignal = mimic.pending;
+            mimic.pulseTimer = 0.9;
+            mimic.pulseLife = 0.9;
+            setPulseText(`Mimic replay ${formatOffset(mimic.pending.offset)}`);
+          }
+          mimic.pending = null;
+        }
+      }
+      if (mimic.pulseTimer > 0) {
+        mimic.pulseTimer = Math.max(0, mimic.pulseTimer - dt);
+        if (mimic.pulseTimer === 0) mimic.activeSignal = null;
+      }
+    }
+
+    for (let i = bees.length - 1; i >= 0; i -= 1) {
+      const bee = bees[i];
+      updateBee(bee, dt, stage);
+      if (bee.phase === "done" || bee.phase === "gone") bees.splice(i, 1);
+    }
+
+    for (let i = popups.length - 1; i >= 0; i -= 1) {
+      const popup = popups[i];
+      popup.life -= dt;
+      popup.y += popup.vy * dt;
+      if (popup.life <= 0) popups.splice(i, 1);
+    }
+
+    for (let i = particles.length - 1; i >= 0; i -= 1) {
+      const particle = particles[i];
+      particle.life -= dt;
+      if (particle.life <= 0) particles.splice(i, 1);
+    }
+
+    for (let i = deliveries.length - 1; i >= 0; i -= 1) {
+      deliveries[i].life -= dt;
+      if (deliveries[i].life <= 0) deliveries.splice(i, 1);
+    }
+  }
+
+  function updateBee(bee, dt, stage) {
+    const flower = bee.targetFlower;
+    const outboundSpeed = lerp(0.42, 0.56, stage);
+    const loadedSpeed = runTime > 45 ? lerp(0.6, 0.84, Math.abs(switchMap[bee.flowerSector]) > 0 ? 1 : 0.4) : lerp(0.34, 0.5, stage);
+
+    if (bee.phase === "outbound") {
+      bee.progress += dt * outboundSpeed;
+      const p = clamp(bee.progress, 0, 1);
+      const from = pointAt(railAngles[bee.flowerSector], 26);
+      const toward = flower ? { x: flower.x, y: flower.y } : pointAt(railAngles[bee.flowerSector], OUTER_RADIUS + 60);
+      const bend = pointAt(railAngles[bee.flowerSector] + 0.18, lerp(120, 220, p));
+      bee.x = quadratic(from.x, bend.x, toward.x, p);
+      bee.y = quadratic(from.y, bend.y, toward.y, p);
+      maybeIntercept(bee);
+      if (bee.progress >= 1) {
+        if (flower && flower.bloom) {
+          bee.phase = "loading";
+          bee.wait = 0.42;
+          bee.loaded = true;
+          flower.nectar -= 1;
+          if (flower.nectar <= 0) {
+            flower.bloom = false;
+            flower.nectar = 0;
+          }
+        } else {
+          loseBee(bee, 12, "lost off rim");
+        }
+      }
+      return;
+    }
+
+    if (bee.phase === "loading") {
+      bee.wait -= dt;
+      bee.x = flower.x;
+      bee.y = flower.y;
+      if (bee.wait <= 0) {
+        bee.phase = "returning";
+        bee.progress = 0;
+        bee.intendedLane = moduloRail(bee.flowerSector + switchMap[bee.flowerSector]);
+        bee.returnLane = bee.intendedLane;
+        bee.uplifted = switchMap[bee.flowerSector] !== 0;
+      }
+      return;
+    }
+
+    if (bee.phase === "returning") {
+      bee.progress += dt * loadedSpeed;
+      const p = clamp(bee.progress, 0, 1);
+      const from = { x: flower.x, y: flower.y };
+      const laneAngle = railAngles[bee.returnLane];
+      const toward = pointAt(laneAngle, DECISION_RADIUS);
+      const bend = pointAt(laneAngle - 0.22 * Math.sign(switchMap[bee.flowerSector] || 1), lerp(OUTER_RADIUS - 18, 228, p));
+      bee.x = quadratic(from.x, bend.x, toward.x, p);
+      bee.y = quadratic(from.y, bend.y, toward.y, p);
+      maybeIntercept(bee);
+      if (bee.progress >= 1) {
+        const resolvedLane = routeFromOffset(sunAngle, bee.commandOffset);
+        if (resolvedLane === bee.intendedLane) {
+          bee.phase = "banking";
+          bee.progress = 0;
+          if (bee.counterfeitReady) bee.counterfeitApplied = true;
+        } else {
+          bee.phase = "trapped";
+          bee.progress = 0;
+        }
+      }
+      return;
+    }
+
+    if (bee.phase === "banking") {
+      bee.progress += dt * 0.95;
+      const p = clamp(bee.progress, 0, 1);
+      const lane = pointAt(railAngles[bee.intendedLane], DECISION_RADIUS);
+      const bend = pointAt(railAngles[bee.intendedLane], 94);
+      bee.x = quadratic(lane.x, bend.x, CX, p);
+      bee.y = quadratic(lane.y, bend.y, CY, p);
+      if (bee.progress >= 1) {
+        handleDelivery(bee);
+        bee.phase = "done";
+      }
+      return;
+    }
+
+    if (bee.phase === "trapped") {
+      bee.progress += dt * 0.7;
+      const p = clamp(bee.progress, 0, 1);
+      const laneAngle = railAngles[bee.returnLane];
+      const from = pointAt(laneAngle, DECISION_RADIUS);
+      const toward = pointAt(laneAngle + 0.34, OUTER_RADIUS + 80);
+      bee.x = lerp(from.x, toward.x, p);
+      bee.y = lerp(from.y, toward.y, p);
+      if (bee.progress >= 1) {
+        trapBee(bee, 10, "dead-end rail");
+      }
+    }
+  }
+
+  function maybeIntercept(bee) {
+    for (const mimic of mimics) {
+      if (mimic.pulseTimer <= 0 || !mimic.activeSignal) continue;
+      const dx = bee.x - mimic.x;
+      const dy = bee.y - mimic.y;
+      const distance = Math.hypot(dx, dy);
+      const angle = Math.atan2(bee.y - mimic.y, bee.x - mimic.x);
+      const coneDelta = Math.abs(normalizeAngle(angle - (mimic.angle + Math.PI)));
+      const replayId = mimic.replayId;
+      if (distance < 240 && coneDelta < 0.36 && !bee.stolenHits.has(replayId)) {
+        bee.stolenHits.add(replayId);
+        bee.commandOffset = mimic.activeSignal.offset;
+        bee.signalRange = mimic.activeSignal.range;
+        if (bee.loaded) {
+          bee.counterfeitReady = true;
+          bee.returnLane = routeFromOffset(sunAngle, bee.commandOffset);
+        } else {
+          bee.flowerSector = routeFromOffset(sunAngle, bee.commandOffset);
+          bee.targetFlower = flowers.find((f) => f.sector === bee.flowerSector && f.range === bee.signalRange) || null;
+        }
+        addScore(-35, bee.x, bee.y - 8, "", "#ff8d73");
+        changeConfusion(8, bee.x + 6, bee.y + 10);
+      }
+    }
+  }
+
+  function quadratic(a, b, c, t) {
+    const ab = lerp(a, b, t);
+    const bc = lerp(b, c, t);
+    return lerp(ab, bc, t);
+  }
+
+  function endRun() {
+    screen = "gameover";
+    best = Math.max(best, Math.round(score));
+    localStorage.setItem("waggle-switchback-best", String(best));
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+    drawArena();
+    drawFlowers();
+    drawMimics();
+    drawBees();
+    drawEffects();
+    drawHud();
+    if (screen === "title") drawTitle();
+    if (screen === "gameover") drawGameOver();
+  }
+
+  function drawBackground() {
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, "#6b4318");
+    bg.addColorStop(0.42, "#392113");
+    bg.addColorStop(1, "#140a06");
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    for (let i = 0; i < 18; i += 1) {
+      const alpha = 0.025 + i * 0.002;
+      ctx.strokeStyle = `rgba(255, 223, 150, ${alpha})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(CX, CY - 60, 140 + i * 28, -Math.PI * 0.9, Math.PI * 0.1);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.16)";
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.9);
+    ctx.lineTo(0, H);
+    ctx.lineTo(W, H);
+    ctx.lineTo(W, H * 0.84);
+    ctx.lineTo(CX + 320, H * 0.78);
+    ctx.lineTo(CX, H * 0.86);
+    ctx.lineTo(CX - 340, H * 0.8);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawArena() {
+    ctx.save();
+    ctx.translate(CX, CY);
+
+    const halo = ctx.createRadialGradient(0, -38, 24, 0, 0, OUTER_RADIUS + 60);
+    halo.addColorStop(0, "rgba(255, 218, 128, 0.16)");
+    halo.addColorStop(0.4, "rgba(255, 180, 80, 0.05)");
+    halo.addColorStop(1, "rgba(255, 180, 80, 0)");
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(0, 0, OUTER_RADIUS + 60, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(255, 243, 208, 0.11)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([3, 8]);
+    for (let r = 110; r <= OUTER_RADIUS + 36; r += 48) {
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.setLineDash([]);
+
+    for (let i = 0; i < RAIL_COUNT; i += 1) {
+      const angle = railAngles[i];
+      const innerLeft = pointLocal(angle - 0.16, 106);
+      const innerRight = pointLocal(angle + 0.16, 106);
+      const outerLeft = pointLocal(angle - 0.04, OUTER_RADIUS + 12);
+      const outerRight = pointLocal(angle + 0.22, OUTER_RADIUS + 12);
+
+      ctx.strokeStyle = "rgba(255, 247, 224, 0.85)";
+      ctx.lineWidth = 4;
+      ctx.beginPath();
+      ctx.moveTo(innerLeft.x, innerLeft.y);
+      ctx.lineTo(outerLeft.x, outerLeft.y);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(innerRight.x, innerRight.y);
+      ctx.lineTo(outerRight.x, outerRight.y);
+      ctx.stroke();
+
+      ctx.strokeStyle = "rgba(60, 28, 12, 0.56)";
+      ctx.lineWidth = 14;
+      ctx.beginPath();
+      ctx.moveTo(pointLocal(angle + 0.08, 100).x, pointLocal(angle + 0.08, 100).y);
+      ctx.lineTo(pointLocal(angle + 0.08, OUTER_RADIUS - 8).x, pointLocal(angle + 0.08, OUTER_RADIUS - 8).y);
+      ctx.stroke();
+
+      const switchLane = moduloRail(i + switchMap[i]);
+      const switchAngle = railAngles[switchLane];
+      ctx.strokeStyle = switchMap[i] === 0 ? "rgba(255, 210, 120, 0.18)" : "rgba(255, 216, 118, 0.36)";
+      ctx.lineWidth = switchMap[i] === 0 ? 3 : 5;
+      ctx.beginPath();
+      ctx.moveTo(pointLocal(angle, OUTER_RADIUS - 14).x, pointLocal(angle, OUTER_RADIUS - 14).y);
+      ctx.quadraticCurveTo(
+        pointLocal((angle + switchAngle) * 0.5, 232).x,
+        pointLocal((angle + switchAngle) * 0.5, 232).y,
+        pointLocal(switchAngle, DECISION_RADIUS).x,
+        pointLocal(switchAngle, DECISION_RADIUS).y
+      );
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = "#f0a539";
+    ctx.beginPath();
+    ctx.arc(0, 0, HIVE_RADIUS + 18, 0, Math.PI * 2);
+    ctx.fill();
+
+    const hiveGrad = ctx.createRadialGradient(-8, -10, 8, 0, 0, HIVE_RADIUS + 8);
+    hiveGrad.addColorStop(0, "#fff2be");
+    hiveGrad.addColorStop(0.55, "#ffcb6d");
+    hiveGrad.addColorStop(1, "#8e4e16");
+    ctx.fillStyle = hiveGrad;
+    ctx.beginPath();
+    ctx.arc(0, 0, HIVE_RADIUS, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "rgba(95, 48, 14, 0.6)";
+    ctx.lineWidth = 4;
+    for (let i = 0; i < 4; i += 1) {
+      ctx.beginPath();
+      ctx.arc(0, i * 6 - 9, 18 + i * 5, Math.PI * 0.18, Math.PI * 0.82);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    drawSun();
+  }
+
+  function pointLocal(angle, radius) {
+    return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
+  }
+
+  function drawSun() {
+    const sunPos = pointAt(sunAngle, OUTER_RADIUS + 88);
+    ctx.save();
+    ctx.translate(sunPos.x, sunPos.y);
+    ctx.rotate(sunAngle + Math.PI / 2);
+
+    for (let i = 0; i < 8; i += 1) {
+      ctx.rotate(Math.PI / 4);
+      ctx.strokeStyle = i % 2 === 0 ? "rgba(255, 236, 150, 0.86)" : "rgba(255, 198, 95, 0.7)";
+      ctx.lineWidth = i % 2 === 0 ? 4 : 2;
+      ctx.beginPath();
+      ctx.moveTo(0, -30);
+      ctx.lineTo(0, -56 - (i % 2 === 0 ? 12 : 0));
+      ctx.stroke();
+    }
+
+    const grad = ctx.createRadialGradient(-5, -5, 4, 0, 0, 28);
+    grad.addColorStop(0, "#fff8d1");
+    grad.addColorStop(0.45, "#ffd96a");
+    grad.addColorStop(1, "#f08c21");
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(0, 0, 28, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(122, 56, 8, 0.45)";
+    ctx.beginPath();
+    ctx.arc(8, 6, 9, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFlowers() {
+    for (const flower of flowers) {
+      const bloomScale = flower.bloom ? 1 + Math.sin(flower.bloomPulse * 2) * 0.08 : 0.55;
+      const petals = flower.range === "LONG" ? 7 : 6;
+      ctx.save();
+      ctx.translate(flower.x, flower.y);
+      ctx.rotate(flower.bloomPulse * 0.15);
+
+      if (flower.bloom) {
+        const glow = ctx.createRadialGradient(0, 0, 6, 0, 0, flower.range === "LONG" ? 42 : 34);
+        glow.addColorStop(0, "rgba(255, 231, 146, 0.54)");
+        glow.addColorStop(1, "rgba(255, 231, 146, 0)");
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(0, 0, flower.range === "LONG" ? 42 : 34, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      for (let i = 0; i < petals; i += 1) {
+        ctx.rotate(Math.PI * 2 / petals);
+        ctx.fillStyle = flower.bloom ? (flower.range === "LONG" ? "#ffd063" : "#fff0a8") : "#6d4a1f";
+        ctx.beginPath();
+        ctx.ellipse(0, -10 * bloomScale, 8 * bloomScale, 15 * bloomScale, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.fillStyle = flower.bloom ? "#8f3b14" : "#3a2211";
+      ctx.beginPath();
+      ctx.arc(0, 0, 8 + bloomScale * 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  function drawMimics() {
+    for (const mimic of mimics) {
+      ctx.save();
+      ctx.translate(mimic.x, mimic.y);
+      ctx.rotate(mimic.angle + Math.PI / 2);
+
+      if (mimic.pulseTimer > 0) {
+        const t = mimic.pulseTimer / mimic.pulseLife;
+        ctx.strokeStyle = `rgba(185, 228, 255, ${0.32 + (1 - t) * 0.35})`;
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 3; i += 1) {
+          ctx.beginPath();
+          ctx.arc(0, 0, 18 + i * 16 + (1 - t) * 10, -0.44, 0.44);
+          ctx.stroke();
+        }
+      }
+
+      ctx.fillStyle = "#090707";
+      ctx.beginPath();
+      ctx.moveTo(0, -12);
+      ctx.lineTo(18, 4);
+      ctx.lineTo(4, 2);
+      ctx.lineTo(0, 16);
+      ctx.lineTo(-4, 2);
+      ctx.lineTo(-18, 4);
+      ctx.closePath();
+      ctx.fill();
+
+      ctx.restore();
+    }
+  }
+
+  function drawBees() {
+    for (const bee of bees) {
+      ctx.save();
+      const angle = Math.atan2(bee.y - CY, bee.x - CX);
+      ctx.translate(bee.x, bee.y);
+      ctx.rotate(angle + Math.PI / 2);
+      ctx.fillStyle = bee.loaded ? "#ffdb76" : "#ffe89d";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, 8, 13, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#2b190b";
+      ctx.lineWidth = 2.6;
+      ctx.beginPath();
+      ctx.moveTo(-5, -6);
+      ctx.lineTo(5, -6);
+      ctx.moveTo(-6, 0);
+      ctx.lineTo(6, 0);
+      ctx.moveTo(-5, 6);
+      ctx.lineTo(5, 6);
+      ctx.stroke();
+      ctx.fillStyle = "rgba(255, 255, 255, 0.34)";
+      ctx.beginPath();
+      ctx.ellipse(-6, -4, 5, 9, -0.4, 0, Math.PI * 2);
+      ctx.ellipse(6, -4, 5, 9, 0.4, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (bee.loaded) {
+        ctx.fillStyle = "#f19c2f";
+        ctx.beginPath();
+        ctx.ellipse(0, 15, 7, 9, 0, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawEffects() {
+    for (const particle of particles) {
+      if (particle.type === "burst") {
+        const alpha = particle.life;
+        ctx.strokeStyle = `rgba(255, 238, 176, ${alpha})`;
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 7; i += 1) {
+          const angle = i / 7 * Math.PI * 2 + (1 - alpha) * 0.5;
+          ctx.beginPath();
+          ctx.moveTo(particle.x, particle.y);
+          ctx.lineTo(particle.x + Math.cos(angle) * (18 + (1 - alpha) * 30), particle.y + Math.sin(angle) * (18 + (1 - alpha) * 30));
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.textAlign = "center";
+    ctx.font = "bold 20px Georgia";
+    for (const popup of popups) {
+      ctx.globalAlpha = clamp(popup.life, 0, 1);
+      ctx.fillStyle = popup.color;
+      ctx.fillText(popup.text, popup.x, popup.y);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(24, 12, 7, 0.78)";
+    roundRect(28, 24, 1224, 86, 18);
+    ctx.fill();
+
+    ctx.fillStyle = "#fff4dd";
+    ctx.font = "bold 20px Georgia";
+    ctx.textAlign = "left";
+    ctx.fillText("WAGGLE SWITCHBACK", 52, 58);
+    ctx.font = "16px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.78)";
+    ctx.fillText("Send a lie now so the mimic makes it true later.", 52, 82);
+
+    ctx.font = "bold 28px Georgia";
+    ctx.fillStyle = "#fff0b8";
+    ctx.fillText(`${Math.round(score)}`, 468, 60);
+    ctx.font = "14px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.72)";
+    ctx.fillText("SCORE", 470, 84);
+
+    ctx.font = "bold 28px Georgia";
+    ctx.fillStyle = timeLeft <= 15 ? "#ff9d75" : "#fff0b8";
+    ctx.fillText(timeLeft.toFixed(1), 620, 60);
+    ctx.font = "14px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.72)";
+    ctx.fillText("TIME", 620, 84);
+
+    const confusionX = 738;
+    ctx.font = "bold 14px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.78)";
+    ctx.fillText("CONFUSION", confusionX, 44);
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    roundRect(confusionX, 56, 200, 18, 9);
+    ctx.fill();
+    const confusionFill = ctx.createLinearGradient(confusionX, 0, confusionX + 200, 0);
+    confusionFill.addColorStop(0, "#f0bb48");
+    confusionFill.addColorStop(1, "#ff6659");
+    ctx.fillStyle = confusionFill;
+    roundRect(confusionX, 56, 200 * (confusion / MAX_CONFUSION), 18, 9);
+    ctx.fill();
+
+    ctx.font = "bold 16px Georgia";
+    ctx.fillStyle = hushTimer > 0 ? "#aee6ff" : "#fff4dd";
+    ctx.fillText(`COMMAND ${formatOffset(plannedOffset)}  ${plannedRange}`, 980, 50);
+    ctx.fillStyle = hushTimer > 0 ? "#aee6ff" : comboMultiplier > 1 ? "#ffd266" : "rgba(255, 244, 221, 0.75)";
+    ctx.fillText(hushTimer > 0 ? "HUSH ACTIVE" : `MULTIPLIER x${comboMultiplier.toFixed(1).replace(".0", "")}`, 980, 78);
+
+    ctx.textAlign = "center";
+    for (let i = 0; i < MAX_HIVE_CHARGE; i += 1) {
+      ctx.fillStyle = i < hiveCharge ? "#ffd15c" : "rgba(255,255,255,0.1)";
+      ctx.beginPath();
+      ctx.arc(1136 + i * 16, 52, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.font = "12px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.7)";
+    ctx.fillText("IDLE FORAGERS", 1172, 78);
+
+    if (pulseTextTimer > 0) {
+      ctx.fillStyle = `rgba(255, 232, 168, ${pulseTextTimer})`;
+      ctx.font = "bold 20px Georgia";
+      ctx.fillText(pulseText, W * 0.5, 136);
+    }
+    ctx.restore();
+  }
+
+  function drawTitle() {
+    ctx.save();
+    ctx.fillStyle = "rgba(12, 6, 3, 0.68)";
+    ctx.fillRect(0, 0, W, H);
+
+    roundRect(170, 132, 940, 598, 36);
+    const panel = ctx.createLinearGradient(0, 132, 0, 730);
+    panel.addColorStop(0, "rgba(63, 35, 15, 0.94)");
+    panel.addColorStop(1, "rgba(20, 10, 6, 0.94)");
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 224, 130, 0.22)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff0b8";
+    ctx.font = "bold 58px Georgia";
+    ctx.fillText("WAGGLE SWITCHBACK", W * 0.5, 228);
+    ctx.font = "italic 24px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.82)";
+    ctx.fillText("Conduct hive traffic on impossible rails.", W * 0.5, 266);
+
+    ctx.textAlign = "left";
+    ctx.font = "20px Georgia";
+    ctx.fillStyle = "#ffd566";
+    ctx.fillText("The twist", 236, 334);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.85)";
+    wrapText(
+      "The same relative command can be wrong when bees leave, then right when they return. The sun rotates, loaded bees use different rails, and mimic birds may replay the signal later. Plan for when the lie becomes true.",
+      236, 368, 804, 30
+    );
+
+    ctx.font = "20px Georgia";
+    ctx.fillStyle = "#ffd566";
+    ctx.fillText("Controls", 236, 486);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.85)";
+    wrapText(
+      "Left / Right: rotate waggle by 45 degrees relative to the sun. Up: SHORT ring. Down: LONG ring. Space: broadcast to all idle foragers. Shift: HUSH for 1 second, blocking mimic replays but disabling combo multipliers.",
+      236, 520, 804, 30
+    );
+
+    ctx.fillStyle = "#fff0b8";
+    ctx.font = "bold 24px Georgia";
+    ctx.textAlign = "center";
+    ctx.fillText("Press Space or Enter to begin", W * 0.5, 660);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.72)";
+    ctx.fillText("Score nectar before 60 seconds end or confusion maxes out.", W * 0.5, 694);
+    ctx.restore();
+  }
+
+  function drawGameOver() {
+    ctx.save();
+    ctx.fillStyle = "rgba(12, 6, 3, 0.72)";
+    ctx.fillRect(0, 0, W, H);
+
+    roundRect(282, 188, 716, 420, 34);
+    const panel = ctx.createLinearGradient(0, 188, 0, 608);
+    panel.addColorStop(0, "rgba(58, 30, 14, 0.96)");
+    panel.addColorStop(1, "rgba(18, 9, 5, 0.96)");
+    ctx.fillStyle = panel;
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 224, 130, 0.22)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#fff0b8";
+    ctx.font = "bold 54px Georgia";
+    ctx.fillText("Run Over", W * 0.5, 272);
+    ctx.font = "22px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.82)";
+    ctx.fillText(endReason, W * 0.5, 314);
+
+    ctx.font = "bold 64px Georgia";
+    ctx.fillStyle = "#ffd566";
+    ctx.fillText(`${Math.round(score)}`, W * 0.5, 398);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.72)";
+    ctx.fillText(`Best ${best}`, W * 0.5, 430);
+
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(255, 244, 221, 0.85)";
+    wrapText(
+      "Loaded returns are worth 100. Uphill switchbacks add 40. A stolen replay that becomes correct adds 75. Use HUSH sparingly: it blocks mimics but kills multipliers.",
+      352, 488, 576, 30
+    );
+
+    ctx.font = "bold 24px Georgia";
+    ctx.fillStyle = "#fff0b8";
+    ctx.fillText("Press Space or Enter to restart", W * 0.5, 560);
+    ctx.restore();
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function wrapText(text, x, y, maxWidth, lineHeight) {
+    const words = text.split(" ");
+    let line = "";
+    for (const word of words) {
+      const test = line ? `${line} ${word}` : word;
+      if (ctx.measureText(test).width > maxWidth && line) {
+        ctx.fillText(line, x, y);
+        y += lineHeight;
+        line = word;
+      } else {
+        line = test;
+      }
+    }
+    if (line) ctx.fillText(line, x, y);
+  }
+
+  function keyPressed(code) {
+    return pressed.has(code);
+  }
+
+  function handleInput() {
+    if ((screen === "title" || screen === "gameover") && (keyPressed("Space") || keyPressed("Enter"))) {
+      resetRun();
+      pressed.clear();
+      return;
+    }
+    if (screen !== "playing") return;
+
+    if (keyPressed("ArrowLeft") || keyPressed("KeyA")) {
+      plannedOffset = normalizeAngle(plannedOffset - ANGLE_STEP);
+      setPulseText(`Planned ${formatOffset(plannedOffset)}`);
+    }
+    if (keyPressed("ArrowRight") || keyPressed("KeyD")) {
+      plannedOffset = normalizeAngle(plannedOffset + ANGLE_STEP);
+      setPulseText(`Planned ${formatOffset(plannedOffset)}`);
+    }
+    if (keyPressed("ArrowUp") || keyPressed("KeyW")) {
+      plannedRange = "SHORT";
+      setPulseText("SHORT range selected");
+    }
+    if (keyPressed("ArrowDown") || keyPressed("KeyS")) {
+      plannedRange = "LONG";
+      setPulseText("LONG range selected");
+    }
+    if (keyPressed("ShiftLeft") || keyPressed("ShiftRight")) emitHush();
+    if (keyPressed("Space")) launchWave();
+  }
+
+  window.addEventListener("keydown", (event) => {
+    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Space"].includes(event.code)) event.preventDefault();
+    keys.add(event.code);
+    pressed.add(event.code);
+  });
+
+  window.addEventListener("keyup", (event) => {
+    keys.delete(event.code);
+  });
+
+  function frame(ts) {
+    if (!lastTime) lastTime = ts;
+    const dt = Math.min(0.033, (ts - lastTime) / 1000);
+    lastTime = ts;
+    handleInput();
+    if (screen === "playing") updateGame(dt);
+    draw();
+    pressed.clear();
+    requestAnimationFrame(frame);
+  }
+
+  draw();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
