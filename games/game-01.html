@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Handle With Suspicion</title>
+<style>
+  :root {
+    --bg: #081014;
+    --panel: rgba(6, 17, 24, 0.82);
+    --line: rgba(130, 205, 227, 0.2);
+    --cyan: #8ff6ff;
+    --ice: #d8fbff;
+    --gold: #ffd468;
+    --warning: #ff6b5e;
+    --heat: #ff8d4d;
+    --slush: #9fb7bf;
+    --market: #6af5a9;
+    --evidence: #81e5ff;
+    --smuggler: #ff5474;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      radial-gradient(circle at top, rgba(30, 86, 97, 0.28), transparent 38%),
+      linear-gradient(180deg, #05090d 0%, #081014 55%, #040709 100%);
+    color: #f4fbff;
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1120px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    color: var(--ice);
+    text-decoration: none;
+    padding: 10px 14px;
+    border: 1px solid rgba(216, 251, 255, 0.22);
+    background: rgba(3, 8, 12, 0.72);
+    backdrop-filter: blur(6px);
+    border-radius: 999px;
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(255, 212, 104, 0.8);
+    color: var(--gold);
+  }
+
+  .frame {
+    position: relative;
+    padding-top: 50px;
+  }
+
+  canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+    border-radius: 22px;
+    border: 1px solid rgba(143, 246, 255, 0.16);
+    background:
+      linear-gradient(180deg, rgba(6, 13, 19, 0.96), rgba(8, 18, 24, 0.92));
+    box-shadow:
+      0 20px 80px rgba(0, 0, 0, 0.42),
+      inset 0 0 80px rgba(120, 223, 255, 0.05);
+  }
+
+  .hud-note {
+    margin-top: 10px;
+    color: rgba(216, 251, 255, 0.68);
+    font-size: 13px;
+    letter-spacing: 0.03em;
+    text-align: center;
+  }
+
+  @media (max-width: 720px) {
+    body {
+      padding: 10px;
+    }
+
+    .frame {
+      padding-top: 58px;
+    }
+
+    .back-link {
+      font-size: 13px;
+      padding: 9px 12px;
+    }
+
+    .hud-note {
+      font-size: 12px;
+      line-height: 1.4;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1100" height="760" aria-label="Handle With Suspicion"></canvas>
+      <div class="hud-note">Move with WASD or arrows. Space punches. Shift toggles dock field. Enter scans nearby fish.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const world = { x: 42, y: 118, w: W - 84, h: H - 182 };
+  const centerField = { x: world.x + world.w * 0.28, y: world.y + 36, w: world.w * 0.42, h: world.h - 72 };
+  const marketZone = { x: W - 150, y: world.y + 28, w: 106, h: 138, label: "MARKET", kind: "market" };
+  const evidenceZone = { x: W - 150, y: world.y + world.h * 0.5 - 69, w: 106, h: 138, label: "EVIDENCE", kind: "evidence" };
+  const smugglerZone = { x: W - 150, y: world.y + world.h - 166, w: 106, h: 138, label: "SMUGGLER", kind: "smuggler" };
+  const zones = [marketZone, evidenceZone, smugglerZone];
+  const laneYs = [world.y + 96, world.y + world.h * 0.5, world.y + world.h - 96];
+  const laneCurrentsBase = [1, 0.75, 1.15];
+
+  const keys = new Set();
+  const rng = {
+    range(min, max) { return min + Math.random() * (max - min); },
+    int(min, max) { return Math.floor(this.range(min, max + 1)); },
+    pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  };
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const norm = (x, y) => {
+    const d = Math.hypot(x, y) || 1;
+    return { x: x / d, y: y / d };
+  };
+
+  let state = "title";
+  let stateTimer = 0;
+  let gameTime = 60;
+  let score = 0;
+  let suspicion = 0;
+  let comboFlash = 0;
+  let fieldMode = "HEAT";
+  let fieldAutoSwap = 0;
+  let fieldPulse = 0;
+  let lampTimer = 0;
+  let lastWaveAt = 0;
+  let endedByShutdown = false;
+
+  const player = {
+    x: world.x + 160,
+    y: world.y + world.h * 0.5,
+    r: 18,
+    speed: 280,
+    facing: 0,
+    punchCooldown: 0,
+    lampCooldown: 0,
+    bodyBob: 0
+  };
+
+  const fish = [];
+  const pulses = [];
+  const particles = [];
+  const floaters = [];
+
+  function resetGame() {
+    state = "title";
+    stateTimer = 0;
+    gameTime = 60;
+    score = 0;
+    suspicion = 0;
+    comboFlash = 0;
+    fieldMode = "HEAT";
+    fieldAutoSwap = 0;
+    fieldPulse = 0;
+    lampTimer = 0;
+    lastWaveAt = 0;
+    endedByShutdown = false;
+    fish.length = 0;
+    pulses.length = 0;
+    particles.length = 0;
+    floaters.length = 0;
+    player.x = world.x + 160;
+    player.y = world.y + world.h * 0.5;
+    player.facing = 0;
+    player.punchCooldown = 0;
+    player.lampCooldown = 0;
+    player.bodyBob = 0;
+    for (let i = 0; i < 6; i++) spawnWave(true);
+  }
+
+  function startRun() {
+    state = "play";
+    stateTimer = 0;
+    gameTime = 60;
+    score = 0;
+    suspicion = 0;
+    comboFlash = 0;
+    fieldMode = "HEAT";
+    fieldAutoSwap = 0;
+    fieldPulse = 0;
+    lampTimer = 0;
+    lastWaveAt = -1;
+    endedByShutdown = false;
+    fish.length = 0;
+    pulses.length = 0;
+    particles.length = 0;
+    floaters.length = 0;
+    player.x = world.x + 160;
+    player.y = world.y + world.h * 0.5;
+    player.facing = 0;
+    player.punchCooldown = 0;
+    player.lampCooldown = 0;
+    player.bodyBob = 0;
+    for (let i = 0; i < 4; i++) spawnWave(true);
+  }
+
+  function endRun(shutdown) {
+    endedByShutdown = shutdown;
+    state = "gameover";
+    stateTimer = 0;
+  }
+
+  function makeFish(opts = {}) {
+    const suspicious = opts.suspicious ?? (Math.random() < 0.35);
+    const schoolId = opts.schoolId ?? 0;
+    const lane = opts.lane ?? rng.int(0, 2);
+    const spawnX = world.x - rng.range(20, 160);
+    const spawnY = laneYs[lane] + rng.range(-28, 28);
+    const heading = norm(1, rng.range(-0.2, 0.2));
+    const baseSpeed = rng.range(48, 86) + opts.speedBoost;
+    return {
+      x: spawnX,
+      y: spawnY,
+      vx: heading.x * baseSpeed,
+      vy: heading.y * baseSpeed,
+      lane,
+      suspicious,
+      revealed: false,
+      inspected: false,
+      directTouchCooldown: 0,
+      tagged: false,
+      schoolId,
+      temp: suspicious ? rng.range(1.4, 2.6) : rng.range(0.7, 1.7),
+      frozen: false,
+      slush: 0,
+      size: rng.range(20, 28),
+      flip: rng.range(0, Math.PI * 2),
+      stampTilt: rng.range(-0.3, 0.3),
+      erratic: suspicious ? rng.range(0.6, 1.4) : rng.range(0.05, 0.35),
+      age: 0,
+      escaped: false,
+      scored: false
+    };
+  }
+
+  function spawnWave(initial = false) {
+    const progress = 1 - gameTime / 60;
+    const late = gameTime <= 15;
+    const count = initial ? 2 : (progress < 0.25 ? rng.int(2, 3) : progress < 0.7 ? rng.int(3, 4) : rng.int(4, 6));
+    const speedBoost = progress * 34 + (late ? 34 : 0);
+    const schoolChance = progress > 0.55 ? 0.45 : 0.18;
+    const makeSchool = !initial && Math.random() < schoolChance;
+    const schoolId = makeSchool ? rng.int(1000, 9999) : 0;
+    const suspiciousBias = progress < 0.2 ? 0.32 : progress < 0.6 ? 0.42 : 0.48;
+
+    for (let i = 0; i < count; i++) {
+      const lane = rng.int(0, 2);
+      const suspicious = makeSchool ? (i === 0 ? true : Math.random() < 0.75) : (Math.random() < suspiciousBias);
+      const f = makeFish({
+        suspicious,
+        lane,
+        schoolId,
+        speedBoost
+      });
+      if (makeSchool) {
+        f.x -= i * (f.size * 1.1 + 8);
+        f.y += (i - count / 2) * 14;
+      }
+      fish.push(f);
+    }
+  }
+
+  function tempBand(temp, frozen) {
+    if (frozen) return "frozen";
+    if (temp < 0.45) return "cold";
+    if (temp < 1.2) return "cool";
+    if (temp < 2.1) return "warm";
+    if (temp < 3.15) return "hot";
+    return "superheated";
+  }
+
+  function addFloater(text, x, y, color, size = 18) {
+    floaters.push({ text, x, y, color, age: 0, size });
+  }
+
+  function spawnParticleBurst(x, y, color, count, speed, spread = Math.PI * 2) {
+    for (let i = 0; i < count; i++) {
+      const a = rng.range(0, spread);
+      const s = rng.range(speed * 0.4, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * s,
+        vy: Math.sin(a) * s,
+        life: rng.range(0.35, 0.9),
+        age: 0,
+        color,
+        size: rng.range(2, 7)
+      });
+    }
+  }
+
+  function emitTrail(f) {
+    if (Math.random() > 0.5) return;
+    let color = "rgba(173, 232, 255, 0.25)";
+    const band = tempBand(f.temp, f.frozen);
+    if (band === "hot" || band === "superheated") color = "rgba(255, 156, 86, 0.28)";
+    if (band === "frozen") color = "rgba(220, 252, 255, 0.42)";
+    particles.push({
+      x: f.x - f.vx * 0.02,
+      y: f.y - f.vy * 0.02,
+      vx: rng.range(-16, 16),
+      vy: rng.range(-18, 18),
+      life: rng.range(0.2, 0.55),
+      age: 0,
+      color,
+      size: rng.range(2, 5)
+    });
+  }
+
+  function createPunch() {
+    player.punchCooldown = 0.62;
+    const punch = {
+      x: player.x + Math.cos(player.facing) * 16,
+      y: player.y + Math.sin(player.facing) * 16,
+      age: 0,
+      shoveRadius: 88,
+      freezeDelay: 0.2,
+      freezeRadius: 112,
+      triggered: false,
+      comboHits: 0
+    };
+    pulses.push(punch);
+    spawnParticleBurst(punch.x, punch.y, "rgba(255, 245, 210, 0.52)", 18, 160);
+    for (const f of fish) {
+      const d = dist(f.x, f.y, punch.x, punch.y);
+      if (d <= punch.shoveRadius + f.size) {
+        const dir = norm(f.x - punch.x, f.y - punch.y);
+        const force = lerp(260, 110, d / (punch.shoveRadius + f.size));
+        f.vx += dir.x * force;
+        f.vy += dir.y * force;
+        f.temp = clamp(f.temp + 0.95, 0, 4.2);
+        if (fieldMode === "HEAT" && insideField(f.x, f.y)) {
+          f.temp = clamp(f.temp + 0.8, 0, 4.2);
+        } else if (fieldMode === "CHILL" && insideField(f.x, f.y)) {
+          f.temp = clamp(f.temp - 0.35, 0, 4.2);
+        }
+        if (f.schoolId) {
+          for (const other of fish) {
+            if (other !== f && other.schoolId === f.schoolId) {
+              const link = norm(other.x - f.x, other.y - f.y);
+              other.vx += link.x * 40;
+              other.vy += link.y * 40;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  function triggerFreezePulse(p) {
+    p.triggered = true;
+    let frozenSuspicious = 0;
+    for (const f of fish) {
+      const d = dist(f.x, f.y, p.x, p.y);
+      if (d > p.freezeRadius + f.size) continue;
+      const dir = norm(f.x - p.x, f.y - p.y);
+      const force = lerp(180, 60, d / (p.freezeRadius + f.size));
+      f.vx += dir.x * force;
+      f.vy += dir.y * force;
+
+      if (!f.frozen) {
+        const band = tempBand(f.temp, false);
+        if (band === "superheated") {
+          f.frozen = true;
+          f.temp = 0;
+          f.slush = 0;
+          spawnParticleBurst(f.x, f.y, "rgba(218, 250, 255, 0.75)", 20, 140);
+          if (f.suspicious) frozenSuspicious += 1;
+        } else if (band === "warm" || band === "cool") {
+          f.slush = Math.max(f.slush, 5.2);
+          f.temp = Math.max(0.25, f.temp - 0.8);
+          score -= 30;
+          addFloater("-30 SLOP", f.x, f.y - 20, "#c8d6dc", 16);
+          spawnParticleBurst(f.x, f.y, "rgba(180, 205, 214, 0.55)", 12, 90);
+        } else if (band === "hot") {
+          f.temp = clamp(f.temp - 1.55, 0, 4.2);
+        } else if (band === "cold") {
+          f.temp = clamp(f.temp - 0.25, 0, 4.2);
+        }
+      }
+    }
+    if (frozenSuspicious >= 2) {
+      const mult = frozenSuspicious;
+      const bonus = 40 * mult;
+      score += bonus;
+      comboFlash = 1.1;
+      addFloater("COMBO x" + mult, p.x, p.y - 32, "#8ff6ff", 24);
+    }
+  }
+
+  function insideField(x, y) {
+    return x > centerField.x && x < centerField.x + centerField.w && y > centerField.y && y < centerField.y + centerField.h;
+  }
+
+  function scanNearby() {
+    player.lampCooldown = 1.2;
+    lampTimer = 1;
+    let found = 0;
+    for (const f of fish) {
+      if (dist(player.x, player.y, f.x, f.y) <= 146) {
+        f.revealed = true;
+        if (!f.inspected) {
+          f.inspected = true;
+          if (f.suspicious) {
+            score += 20;
+            addFloater("+20 CLEAN CASE", f.x, f.y - 24, "#ffd468", 15);
+          }
+        }
+        found += 1;
+      }
+    }
+    spawnParticleBurst(player.x, player.y, "rgba(255, 228, 135, 0.4)", 14 + found, 120);
+  }
+
+  function updatePlayer(dt) {
+    let dx = 0;
+    let dy = 0;
+    if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dx -= 1;
+    if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) dx += 1;
+    if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) dy -= 1;
+    if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) dy += 1;
+    if (dx || dy) {
+      const n = norm(dx, dy);
+      player.x += n.x * player.speed * dt;
+      player.y += n.y * player.speed * dt;
+      player.facing = Math.atan2(n.y, n.x);
+    }
+    player.x = clamp(player.x, world.x + player.r, world.x + world.w - player.r);
+    player.y = clamp(player.y, world.y + player.r, world.y + world.h - player.r);
+    player.punchCooldown = Math.max(0, player.punchCooldown - dt);
+    player.lampCooldown = Math.max(0, player.lampCooldown - dt);
+    player.bodyBob += dt * 5;
+  }
+
+  function updateFish(dt) {
+    const progress = 1 - gameTime / 60;
+    const late = gameTime <= 15;
+    const laneDrift = late ? Math.sin(stateTimer * 7.5) * 0.8 : 0;
+    const dynamicCurrent = laneCurrentsBase.map((v, i) => v + (late ? (i === 1 ? -laneDrift : laneDrift) : 0));
+
+    for (let i = fish.length - 1; i >= 0; i--) {
+      const f = fish[i];
+      f.age += dt;
+      f.flip += dt * (f.erratic * 2 + Math.abs(f.vx) * 0.005);
+      f.directTouchCooldown = Math.max(0, f.directTouchCooldown - dt);
+
+      const laneY = laneYs[f.lane];
+      const current = dynamicCurrent[f.lane] * (26 + progress * 28 + (late ? 42 : 0));
+      const swim = Math.sin(f.age * (f.suspicious ? 6.2 : 4.2) + f.erratic * 3) * (f.suspicious ? 42 : 18);
+      const schoolPull = f.schoolId ? Math.sin(f.age * 4 + f.schoolId) * 16 : 0;
+
+      f.vx += current * dt;
+      f.vy += ((laneY + swim + schoolPull) - f.y) * dt * (f.suspicious ? 1.8 : 1.1);
+      if (f.suspicious) {
+        f.vx += Math.cos(f.age * 5.8 + f.erratic * 7) * 18 * dt;
+        f.vy += Math.sin(f.age * 7.1 + f.erratic * 9) * 26 * dt;
+      }
+      if (insideField(f.x, f.y)) {
+        if (fieldMode === "HEAT") f.temp = clamp(f.temp + dt * 0.72, 0, 4.2);
+        else f.temp = clamp(f.temp - dt * 0.68, 0, 4.2);
+      } else if (!f.frozen) {
+        const coolRate = f.temp > 2.1 ? 0.18 : 0.1;
+        f.temp = clamp(f.temp - dt * coolRate, 0, 4.2);
+      }
+
+      if (f.slush > 0) {
+        f.slush = Math.max(0, f.slush - dt);
+        f.vx *= 0.94;
+        f.vy *= 0.9;
+      }
+      if (f.frozen) {
+        f.vx *= 0.992;
+        f.vy *= 0.992;
+      } else {
+        f.vx *= 0.997;
+        f.vy *= 0.994;
+      }
+
+      f.x += f.vx * dt;
+      f.y += f.vy * dt;
+
+      if (f.x < world.x + f.size) {
+        f.x = world.x + f.size;
+        f.vx = Math.abs(f.vx) * 0.55;
+      }
+      if (f.y < world.y + f.size) {
+        f.y = world.y + f.size;
+        f.vy = Math.abs(f.vy) * 0.7;
+      }
+      if (f.y > world.y + world.h - f.size) {
+        f.y = world.y + world.h - f.size;
+        f.vy = -Math.abs(f.vy) * 0.7;
+      }
+
+      for (let j = i - 1; j >= 0; j--) {
+        const o = fish[j];
+        const dx = f.x - o.x;
+        const dy = f.y - o.y;
+        const d = Math.hypot(dx, dy);
+        const minD = f.size * 0.45 + o.size * 0.45;
+        if (d > 0 && d < minD) {
+          const n = { x: dx / d, y: dy / d };
+          const overlap = (minD - d) * 0.5;
+          f.x += n.x * overlap;
+          f.y += n.y * overlap;
+          o.x -= n.x * overlap;
+          o.y -= n.y * overlap;
+          const push = f.frozen || o.frozen ? 90 : 45;
+          f.vx += n.x * push;
+          f.vy += n.y * push;
+          o.vx -= n.x * push;
+          o.vy -= n.y * push;
+        }
+      }
+
+      const contact = dist(player.x, player.y, f.x, f.y);
+      if (contact < player.r + f.size * 0.42) {
+        const n = norm(f.x - player.x, f.y - player.y);
+        f.x = player.x + n.x * (player.r + f.size * 0.42 + 1);
+        f.y = player.y + n.y * (player.r + f.size * 0.42 + 1);
+        f.vx += n.x * 140;
+        f.vy += n.y * 140;
+        if (f.suspicious && !f.revealed && f.directTouchCooldown <= 0) {
+          f.directTouchCooldown = 0.5;
+          suspicion = clamp(suspicion + 24, 0, 100);
+          addFloater("ILLEGAL HANDLING", f.x, f.y - 26, "#ff6b5e", 16);
+          spawnParticleBurst(f.x, f.y, "rgba(255, 80, 110, 0.55)", 20, 130);
+          if (suspicion >= 100) {
+            endRun(true);
+            return;
+          }
+        }
+      }
+
+      for (const zone of zones) {
+        if (f.x > zone.x && f.x < zone.x + zone.w && f.y > zone.y && f.y < zone.y + zone.h) {
+          if (f.scored) break;
+          f.scored = true;
+          if (zone.kind === "market") {
+            if (f.suspicious) {
+              score -= 75;
+              addFloater("-75 LEAK", zone.x + 18, f.y, "#ff6b5e", 17);
+            } else {
+              score += 40;
+              addFloater("+40 MARKET", zone.x + 16, f.y, "#6af5a9", 17);
+            }
+          } else if (zone.kind === "evidence") {
+            if (f.suspicious && f.frozen) {
+              score += 100;
+              addFloater("+100 EVIDENCE", zone.x + 6, f.y, "#81e5ff", 18);
+            } else if (f.suspicious) {
+              score -= 75;
+              addFloater("-75 BAD CHAIN", zone.x + 4, f.y, "#ff6b5e", 16);
+            } else {
+              score -= 20;
+              addFloater("-20 MISFILED", zone.x + 10, f.y, "#d9c2aa", 15);
+            }
+          } else if (zone.kind === "smuggler") {
+            if (f.suspicious) {
+              score -= 75;
+              addFloater("-75 SMUGGLED", zone.x + 2, f.y, "#ff5474", 17);
+            } else {
+              score -= 15;
+              addFloater("-15 BRIBE", zone.x + 14, f.y, "#ff9fb5", 15);
+            }
+          }
+          spawnParticleBurst(f.x, f.y, zone.kind === "evidence" ? "rgba(129,229,255,0.6)" : zone.kind === "market" ? "rgba(106,245,169,0.5)" : "rgba(255,84,116,0.5)", 14, 120);
+          fish.splice(i, 1);
+          break;
+        }
+      }
+
+      if (i >= fish.length) continue;
+      if (f.x > world.x + world.w + 46 && !f.scored) {
+        score -= f.suspicious ? 75 : 0;
+        if (f.suspicious) addFloater("-75 LOST", world.x + world.w - 30, f.y - 12, "#ff6b5e", 16);
+        fish.splice(i, 1);
+        continue;
+      }
+
+      emitTrail(f);
+    }
+  }
+
+  function updatePulses(dt) {
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      const p = pulses[i];
+      p.age += dt;
+      if (!p.triggered && p.age >= p.freezeDelay) triggerFreezePulse(p);
+      if (p.age > 0.58) pulses.splice(i, 1);
+    }
+  }
+
+  function updateParticles(dt) {
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.age += dt;
+      if (p.age >= p.life) {
+        particles.splice(i, 1);
+        continue;
+      }
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+    }
+  }
+
+  function updateFloaters(dt) {
+    for (let i = floaters.length - 1; i >= 0; i--) {
+      const f = floaters[i];
+      f.age += dt;
+      if (f.age > 1.2) {
+        floaters.splice(i, 1);
+        continue;
+      }
+      f.y -= dt * 28;
+    }
+  }
+
+  function updatePlay(dt) {
+    stateTimer += dt;
+    gameTime = Math.max(0, gameTime - dt);
+    comboFlash = Math.max(0, comboFlash - dt);
+    lampTimer = Math.max(0, lampTimer - dt);
+    fieldPulse += dt * (fieldMode === "HEAT" ? 2.8 : 2.2);
+
+    const progress = 1 - gameTime / 60;
+    const late = gameTime <= 15;
+    const spawnGap = late ? 1.15 : progress < 0.2 ? 2.7 : progress < 0.6 ? 2.1 : 1.5;
+    if (stateTimer - lastWaveAt > spawnGap) {
+      lastWaveAt = stateTimer;
+      spawnWave(false);
+    }
+
+    if (late) {
+      fieldAutoSwap -= dt;
+      if (fieldAutoSwap <= 0) {
+        fieldAutoSwap = rng.range(1.1, 2.15);
+        fieldMode = fieldMode === "HEAT" ? "CHILL" : "HEAT";
+        addFloater(fieldMode + " FIELD", centerField.x + centerField.w * 0.5 - 48, centerField.y + 18, fieldMode === "HEAT" ? "#ff9c56" : "#8ff6ff", 18);
+      }
+    }
+
+    updatePlayer(dt);
+    updateFish(dt);
+    updatePulses(dt);
+    updateParticles(dt);
+    updateFloaters(dt);
+
+    if (gameTime <= 0) endRun(false);
+  }
+
+  function drawBackground() {
+    const grd = ctx.createLinearGradient(0, 0, 0, H);
+    grd.addColorStop(0, "#071015");
+    grd.addColorStop(1, "#09161e");
+    ctx.fillStyle = grd;
+    ctx.fillRect(0, 0, W, H);
+
+    for (let i = 0; i < 42; i++) {
+      const x = (i * 173.8) % W;
+      const y = (i * 97.4) % H;
+      ctx.fillStyle = "rgba(255,255,255,0.025)";
+      ctx.beginPath();
+      ctx.arc(x, y, 1.2 + (i % 3), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const dockGlow = ctx.createRadialGradient(W * 0.58, H * 0.42, 20, W * 0.58, H * 0.42, W * 0.45);
+    dockGlow.addColorStop(0, "rgba(137, 228, 255, 0.08)");
+    dockGlow.addColorStop(1, "rgba(4, 9, 13, 0)");
+    ctx.fillStyle = dockGlow;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  function drawWorld() {
+    ctx.save();
+    ctx.fillStyle = "#0c1419";
+    roundRect(ctx, world.x, world.y, world.w, world.h, 24);
+    ctx.fill();
+
+    const asphalt = ctx.createLinearGradient(world.x, world.y, world.x, world.y + world.h);
+    asphalt.addColorStop(0, "#10181d");
+    asphalt.addColorStop(1, "#0a1116");
+    ctx.fillStyle = asphalt;
+    roundRect(ctx, world.x + 6, world.y + 6, world.w - 12, world.h - 12, 20);
+    ctx.fill();
+
+    for (let i = 0; i < 3; i++) {
+      const y = laneYs[i];
+      ctx.strokeStyle = "rgba(118, 170, 186, 0.14)";
+      ctx.lineWidth = 3;
+      ctx.setLineDash([12, 20]);
+      ctx.beginPath();
+      ctx.moveTo(world.x + 20, y);
+      ctx.lineTo(world.x + world.w - 170, y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    for (let i = 0; i < 3; i++) {
+      const py = laneYs[i];
+      ctx.fillStyle = "rgba(220, 244, 255, 0.03)";
+      ctx.beginPath();
+      ctx.ellipse(world.x + 120, py, 110, 36, 0, 0, Math.PI * 2);
+      ctx.fill();
+
+      drawArrow(world.x + 96, py, 34, "rgba(130, 205, 227, 0.2)");
+      drawArrow(world.x + 262, py, 34, "rgba(130, 205, 227, 0.15)");
+      drawArrow(world.x + 428, py, 34, "rgba(130, 205, 227, 0.1)");
+    }
+
+    const fieldPad = 18 + Math.sin(fieldPulse * 2) * 4;
+    const modeColor = fieldMode === "HEAT" ? "rgba(255, 135, 73, 0.18)" : "rgba(122, 234, 255, 0.18)";
+    const rimColor = fieldMode === "HEAT" ? "rgba(255, 177, 112, 0.34)" : "rgba(143, 246, 255, 0.34)";
+    ctx.fillStyle = modeColor;
+    roundRect(ctx, centerField.x, centerField.y, centerField.w, centerField.h, 28);
+    ctx.fill();
+    ctx.strokeStyle = rimColor;
+    ctx.lineWidth = 2;
+    roundRect(ctx, centerField.x + fieldPad * 0.3, centerField.y + fieldPad * 0.3, centerField.w - fieldPad * 0.6, centerField.h - fieldPad * 0.6, 26);
+    ctx.stroke();
+
+    for (let i = 0; i < 12; i++) {
+      const x = centerField.x + 18 + i * (centerField.w - 36) / 11;
+      const wobble = Math.sin(fieldPulse * 2 + i) * 14;
+      ctx.strokeStyle = fieldMode === "HEAT" ? "rgba(255, 149, 79, 0.12)" : "rgba(149, 241, 255, 0.12)";
+      ctx.beginPath();
+      ctx.moveTo(x, centerField.y + 14);
+      ctx.quadraticCurveTo(x + wobble, centerField.y + centerField.h * 0.5, x, centerField.y + centerField.h - 14);
+      ctx.stroke();
+    }
+
+    for (const zone of zones) {
+      const fill =
+        zone.kind === "market" ? "rgba(106, 245, 169, 0.12)" :
+        zone.kind === "evidence" ? "rgba(129, 229, 255, 0.15)" :
+        "rgba(255, 84, 116, 0.13)";
+      const stroke =
+        zone.kind === "market" ? "rgba(106, 245, 169, 0.46)" :
+        zone.kind === "evidence" ? "rgba(129, 229, 255, 0.5)" :
+        "rgba(255, 84, 116, 0.42)";
+      ctx.fillStyle = fill;
+      roundRect(ctx, zone.x, zone.y, zone.w, zone.h, 20);
+      ctx.fill();
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = 2;
+      roundRect(ctx, zone.x, zone.y, zone.w, zone.h, 20);
+      ctx.stroke();
+      ctx.save();
+      ctx.translate(zone.x + zone.w * 0.5, zone.y + zone.h * 0.5);
+      ctx.rotate(-Math.PI / 2);
+      ctx.fillStyle = stroke;
+      ctx.font = "700 20px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText(zone.label, 0, 7);
+      ctx.restore();
+    }
+    ctx.restore();
+  }
+
+  function drawArrow(x, y, size, color) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(-size * 0.5, -size * 0.26);
+    ctx.lineTo(size * 0.06, -size * 0.26);
+    ctx.lineTo(size * 0.06, -size * 0.48);
+    ctx.lineTo(size * 0.52, 0);
+    ctx.lineTo(size * 0.06, size * 0.48);
+    ctx.lineTo(size * 0.06, size * 0.26);
+    ctx.lineTo(-size * 0.5, size * 0.26);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawFish(f) {
+    const band = tempBand(f.temp, f.frozen);
+    const bodyColor =
+      band === "frozen" ? "#dff8ff" :
+      band === "superheated" ? "#ff8a55" :
+      band === "hot" ? "#ff9d69" :
+      band === "warm" ? "#f8b48f" :
+      band === "cool" ? "#a4bdc8" : "#7f99a4";
+    const edgeColor =
+      f.suspicious ? "rgba(255, 97, 111, 0.85)" :
+      "rgba(227, 241, 247, 0.55)";
+
+    ctx.save();
+    ctx.translate(f.x, f.y);
+    ctx.rotate(Math.atan2(f.vy, f.vx || 0.001) + Math.sin(f.flip) * 0.08);
+    if (f.suspicious && !f.revealed) ctx.globalAlpha = 0.95;
+
+    if (band === "superheated") {
+      ctx.fillStyle = "rgba(255, 157, 105, 0.18)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, f.size * 1.05, f.size * 0.72, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    if (band === "frozen") {
+      ctx.strokeStyle = "rgba(220, 252, 255, 0.65)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, f.size * 0.92, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (f.slush > 0) {
+      ctx.fillStyle = "rgba(197, 214, 220, 0.34)";
+      ctx.beginPath();
+      ctx.ellipse(0, 0, f.size * 0.85, f.size * 0.6, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const grad = ctx.createLinearGradient(-f.size, 0, f.size, 0);
+    grad.addColorStop(0, shade(bodyColor, -18));
+    grad.addColorStop(0.45, bodyColor);
+    grad.addColorStop(1, shade(bodyColor, 10));
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, f.size, f.size * 0.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.beginPath();
+    ctx.moveTo(-f.size * 0.95, 0);
+    ctx.lineTo(-f.size * 1.42, -f.size * 0.46);
+    ctx.lineTo(-f.size * 1.26, 0);
+    ctx.lineTo(-f.size * 1.42, f.size * 0.46);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.fillStyle = "rgba(255,255,255,0.2)";
+    ctx.beginPath();
+    ctx.ellipse(f.size * 0.18, -f.size * 0.13, f.size * 0.36, f.size * 0.11, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#051015";
+    ctx.beginPath();
+    ctx.arc(f.size * 0.52, -f.size * 0.08, Math.max(2.6, f.size * 0.1), 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.save();
+    ctx.translate(f.size * 0.08, f.size * 0.38);
+    ctx.rotate(f.stampTilt);
+    ctx.fillStyle = f.suspicious ? "rgba(255, 88, 108, 0.85)" : "rgba(255, 228, 143, 0.82)";
+    ctx.fillRect(-f.size * 0.18, -f.size * 0.12, f.size * 0.38, f.size * 0.2);
+    ctx.restore();
+
+    if (f.suspicious) {
+      ctx.strokeStyle = edgeColor;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(-f.size * 0.14, -f.size * 0.34);
+      ctx.lineTo(f.size * 0.42, -f.size * 0.38);
+      ctx.stroke();
+    }
+
+    if (f.revealed) {
+      ctx.strokeStyle = f.suspicious ? "rgba(255, 82, 110, 0.95)" : "rgba(111, 250, 170, 0.85)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, f.size * 1.05, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.fillStyle = f.suspicious ? "#ff6b5e" : "#6af5a9";
+      ctx.font = "700 11px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText(f.suspicious ? "SUS" : "LEGAL", 0, -f.size - 10);
+    }
+
+    drawTempBar(f);
+    ctx.restore();
+  }
+
+  function drawTempBar(f) {
+    const width = f.size * 1.4;
+    const y = f.size * 0.94;
+    ctx.fillStyle = "rgba(7, 13, 18, 0.8)";
+    ctx.fillRect(-width * 0.5, y, width, 5);
+    const fill = clamp(f.temp / 4.2, 0, 1);
+    const grad = ctx.createLinearGradient(-width * 0.5, 0, width * 0.5, 0);
+    grad.addColorStop(0, "#6aa6ce");
+    grad.addColorStop(0.35, "#c8d9e1");
+    grad.addColorStop(0.62, "#ffb16d");
+    grad.addColorStop(1, "#ff653c");
+    ctx.fillStyle = f.frozen ? "#ddfbff" : grad;
+    ctx.fillRect(-width * 0.5, y, width * fill, 5);
+  }
+
+  function drawPlayer() {
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.facing);
+
+    if (lampTimer > 0) {
+      const glow = ctx.createRadialGradient(0, 0, 10, 0, 0, 160);
+      glow.addColorStop(0, "rgba(255, 228, 145, 0.22)");
+      glow.addColorStop(1, "rgba(255, 228, 145, 0)");
+      ctx.fillStyle = glow;
+      ctx.beginPath();
+      ctx.arc(0, 0, 160, -0.65, 0.65);
+      ctx.lineTo(0, 0);
+      ctx.closePath();
+      ctx.fill();
+    }
+
+    ctx.fillStyle = "#ffd468";
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 20, 16, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#ff8d4d";
+    ctx.beginPath();
+    ctx.arc(15, -1, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#f8fbff";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(-8, -12);
+    ctx.lineTo(-18, -22);
+    ctx.moveTo(-5, 12);
+    ctx.lineTo(-18, 24);
+    ctx.moveTo(4, -13);
+    ctx.lineTo(-2, -28);
+    ctx.moveTo(7, 13);
+    ctx.lineTo(-2, 29);
+    ctx.stroke();
+
+    ctx.fillStyle = "#081014";
+    ctx.beginPath();
+    ctx.arc(18, -4, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawPulses() {
+    for (const p of pulses) {
+      const shoveT = clamp(p.age / p.freezeDelay, 0, 1);
+      const freezeT = clamp((p.age - p.freezeDelay) / 0.28, 0, 1);
+      if (p.age < p.freezeDelay) {
+        ctx.strokeStyle = `rgba(255, 189, 122, ${0.45 - shoveT * 0.28})`;
+        ctx.lineWidth = 8 * (1 - shoveT * 0.5);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 18 + shoveT * p.shoveRadius, 0, Math.PI * 2);
+        ctx.stroke();
+      } else {
+        ctx.strokeStyle = `rgba(143, 246, 255, ${0.55 - freezeT * 0.4})`;
+        ctx.lineWidth = 10 * (1 - freezeT * 0.65);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 20 + freezeT * p.freezeRadius, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.fillStyle = `rgba(232, 251, 255, ${0.18 - freezeT * 0.12})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 20 + freezeT * 18, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      const a = 1 - p.age / p.life;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * a, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawFloaters() {
+    for (const f of floaters) {
+      const a = 1 - f.age / 1.2;
+      ctx.globalAlpha = a;
+      ctx.fillStyle = f.color;
+      ctx.font = `700 ${f.size}px Georgia, serif`;
+      ctx.textAlign = "left";
+      ctx.fillText(f.text, f.x, f.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(6, 17, 24, 0.84)";
+    roundRect(ctx, 28, 22, W - 56, 74, 20);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(143, 246, 255, 0.14)";
+    ctx.stroke();
+
+    ctx.fillStyle = "#effbff";
+    ctx.font = "700 19px Georgia, serif";
+    ctx.textAlign = "left";
+    ctx.fillText("HANDLE WITH SUSPICION", 52, 49);
+    ctx.font = "14px Georgia, serif";
+    ctx.fillStyle = "rgba(222, 246, 255, 0.78)";
+    ctx.fillText("Stage contraband. Overheat first. Freeze later.", 52, 71);
+
+    ctx.textAlign = "right";
+    ctx.font = "700 28px Georgia, serif";
+    ctx.fillStyle = "#ffd468";
+    ctx.fillText(score.toString(), W - 52, 54);
+    ctx.font = "14px Georgia, serif";
+    ctx.fillStyle = "rgba(222, 246, 255, 0.76)";
+    ctx.fillText("SCORE", W - 52, 74);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#effbff";
+    ctx.font = "700 18px Georgia, serif";
+    ctx.fillText("TIME " + gameTime.toFixed(1), 52, H - 32);
+
+    const susX = 262;
+    const susY = H - 46;
+    ctx.fillStyle = "rgba(12, 18, 22, 0.8)";
+    roundRect(ctx, susX, susY, 222, 16, 10);
+    ctx.fill();
+    const susW = 222 * (suspicion / 100);
+    const susGrad = ctx.createLinearGradient(susX, 0, susX + 222, 0);
+    susGrad.addColorStop(0, "#ffb36e");
+    susGrad.addColorStop(1, "#ff5474");
+    ctx.fillStyle = susGrad;
+    roundRect(ctx, susX, susY, susW, 16, 10);
+    ctx.fill();
+    ctx.fillStyle = "#effbff";
+    ctx.font = "700 14px Georgia, serif";
+    ctx.fillText("SUSPICION", susX, susY - 8);
+
+    const fieldColor = fieldMode === "HEAT" ? "#ff9d69" : "#8ff6ff";
+    ctx.fillStyle = fieldColor;
+    ctx.font = "700 18px Georgia, serif";
+    ctx.fillText("FIELD " + fieldMode, 518, H - 32);
+
+    ctx.fillStyle = player.punchCooldown <= 0 ? "#ffd468" : "rgba(255,255,255,0.42)";
+    ctx.fillText("PUNCH", 700, H - 32);
+    ctx.fillStyle = player.lampCooldown <= 0 ? "#ffd468" : "rgba(255,255,255,0.42)";
+    ctx.fillText("SCAN", 790, H - 32);
+
+    if (comboFlash > 0) {
+      ctx.globalAlpha = comboFlash;
+      ctx.fillStyle = "#8ff6ff";
+      ctx.font = "700 28px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText("CHAIN FREEZE", W * 0.5, 58);
+      ctx.globalAlpha = 1;
+    }
+
+    if (gameTime <= 15) {
+      ctx.fillStyle = "rgba(255, 96, 114, 0.92)";
+      ctx.font = "700 18px Georgia, serif";
+      ctx.textAlign = "center";
+      ctx.fillText("FINAL CHAOS: FIELD AUTO-SWAPS, CURRENTS SPIKE", W * 0.5, 736);
+    }
+    ctx.restore();
+  }
+
+  function drawTitle() {
+    drawBackground();
+    drawWorld();
+    for (const f of fish) drawFish(f);
+    drawPlayer();
+
+    ctx.fillStyle = "rgba(5, 11, 15, 0.7)";
+    roundRect(ctx, 126, 136, W - 252, H - 270, 28);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(143, 246, 255, 0.2)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffd468";
+    ctx.font = "700 52px Georgia, serif";
+    ctx.fillText("Handle With Suspicion", W * 0.5, 224);
+    ctx.fillStyle = "#effbff";
+    ctx.font = "italic 22px Georgia, serif";
+    ctx.fillText("Midnight customs. Suspicious salmon. One deeply wrong solution.", W * 0.5, 262);
+
+    ctx.fillStyle = "rgba(239, 251, 255, 0.9)";
+    ctx.font = "700 21px Georgia, serif";
+    ctx.fillText("The trick", W * 0.5, 330);
+    ctx.font = "18px Georgia, serif";
+    ctx.fillText("Do not grab contraband. Stage it inside the dock field.", W * 0.5, 365);
+    ctx.fillText("Punch once to shove and superheat. A beat later the cavitation collapse freezes it.", W * 0.5, 394);
+    ctx.fillText("Only superheated fish flash-freeze cleanly. Warm fish become lane-clogging slush.", W * 0.5, 423);
+
+    ctx.font = "700 20px Georgia, serif";
+    ctx.fillStyle = "#8ff6ff";
+    ctx.fillText("Controls", W * 0.5, 484);
+    ctx.font = "18px Georgia, serif";
+    ctx.fillStyle = "#effbff";
+    ctx.fillText("Move: WASD or Arrow Keys", W * 0.5, 518);
+    ctx.fillText("Space: Cavitation punch    Shift: Toggle HEAT / CHILL    Enter: Inspection lamp", W * 0.5, 548);
+
+    const blink = 0.55 + Math.sin(stateTimer * 4.5) * 0.45;
+    ctx.globalAlpha = blink;
+    ctx.fillStyle = "#ffd468";
+    ctx.font = "700 24px Georgia, serif";
+    ctx.fillText("Press Space or Enter to Start", W * 0.5, 628);
+    ctx.globalAlpha = 1;
+  }
+
+  function drawGameOver() {
+    drawBackground();
+    drawWorld();
+    for (const f of fish) drawFish(f);
+    drawPlayer();
+    drawParticles();
+    drawFloaters();
+
+    ctx.fillStyle = "rgba(4, 10, 14, 0.76)";
+    roundRect(ctx, 194, 170, W - 388, H - 340, 28);
+    ctx.fill();
+    ctx.strokeStyle = endedByShutdown ? "rgba(255, 84, 116, 0.42)" : "rgba(143, 246, 255, 0.24)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = endedByShutdown ? "#ff6b5e" : "#8ff6ff";
+    ctx.font = "700 50px Georgia, serif";
+    ctx.fillText(endedByShutdown ? "Dock Shutdown" : "Shift Over", W * 0.5, 268);
+
+    ctx.fillStyle = "#effbff";
+    ctx.font = "20px Georgia, serif";
+    ctx.fillText(endedByShutdown ? "You touched suspicious cargo directly and tripped the suspicion meter." : "The sixty-second rush is over. The dock survives another strange night.", W * 0.5, 314);
+
+    ctx.fillStyle = "#ffd468";
+    ctx.font = "700 62px Georgia, serif";
+    ctx.fillText(score.toString(), W * 0.5, 404);
+    ctx.fillStyle = "#effbff";
+    ctx.font = "18px Georgia, serif";
+    ctx.fillText("FINAL SCORE", W * 0.5, 434);
+
+    ctx.font = "18px Georgia, serif";
+    ctx.fillText("Suspicion " + Math.round(suspicion) + " / 100", W * 0.5, 474);
+    ctx.fillText("Frozen suspicious fish belong in EVIDENCE. Legal fish belong in MARKET.", W * 0.5, 506);
+
+    const blink = 0.55 + Math.sin(stateTimer * 4.5) * 0.45;
+    ctx.globalAlpha = blink;
+    ctx.fillStyle = "#ffd468";
+    ctx.font = "700 24px Georgia, serif";
+    ctx.fillText("Press Space or Enter to Play Again", W * 0.5, 582);
+    ctx.globalAlpha = 1;
+  }
+
+  function render() {
+    if (state === "title") {
+      drawTitle();
+      return;
+    }
+    if (state === "gameover") {
+      drawGameOver();
+      return;
+    }
+
+    drawBackground();
+    drawWorld();
+    drawPulses();
+    for (const f of fish) drawFish(f);
+    drawPlayer();
+    drawParticles();
+    drawFloaters();
+    drawHud();
+  }
+
+  function roundRect(context, x, y, w, h, r) {
+    const rr = Math.min(r, w * 0.5, h * 0.5);
+    context.beginPath();
+    context.moveTo(x + rr, y);
+    context.arcTo(x + w, y, x + w, y + h, rr);
+    context.arcTo(x + w, y + h, x, y + h, rr);
+    context.arcTo(x, y + h, x, y, rr);
+    context.arcTo(x, y, x + w, y, rr);
+    context.closePath();
+  }
+
+  function shade(hex, amt) {
+    const s = hex.replace("#", "");
+    const n = parseInt(s, 16);
+    const r = clamp(((n >> 16) & 255) + amt, 0, 255);
+    const g = clamp(((n >> 8) & 255) + amt, 0, 255);
+    const b = clamp((n & 255) + amt, 0, 255);
+    return `rgb(${r}, ${g}, ${b})`;
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    if (state === "title" || state === "gameover") {
+      stateTimer += dt;
+      updateParticles(dt);
+      updateFloaters(dt);
+    } else if (state === "play") {
+      updatePlay(dt);
+    }
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", (e) => {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Enter", "Shift"].includes(e.key)) e.preventDefault();
+    keys.add(e.key);
+
+    if ((state === "title" || state === "gameover") && (e.key === " " || e.key === "Enter")) {
+      startRun();
+      return;
+    }
+    if (state !== "play") return;
+    if (e.repeat && (e.key === "Shift" || e.key === "Enter" || e.key === " ")) return;
+
+    if (e.key === " " && player.punchCooldown <= 0) createPunch();
+    if (e.key === "Shift") fieldMode = fieldMode === "HEAT" ? "CHILL" : "HEAT";
+    if (e.key === "Enter" && player.lampCooldown <= 0) scanNearby();
+  });
+
+  window.addEventListener("keyup", (e) => {
+    keys.delete(e.key);
+  });
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

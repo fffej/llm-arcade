@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weird & Wacky Arcade</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap');
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh;
+    background: #0a0a0a;
+    color: #fff;
+    font-family: 'Press Start 2P', monospace;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 2rem;
+  }
+  h1 {
+    font-size: 1.8rem;
+    margin-bottom: 0.5rem;
+    background: linear-gradient(90deg, #ff006e, #fb5607, #ffbe0b, #3a86ff, #8338ec);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+    animation: hue 4s linear infinite;
+  }
+  @keyframes hue { to { filter: hue-rotate(360deg); } }
+  .subtitle { font-size: 0.6rem; color: #888; margin-bottom: 2rem; }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 1.2rem; width: 100%; max-width: 960px;
+  }
+  .card {
+    background: #1a1a2e;
+    border: 2px solid #333;
+    border-radius: 8px;
+    padding: 1.2rem;
+    transition: all 0.2s;
+    text-decoration: none; color: #fff;
+    display: flex; flex-direction: column; gap: 0.6rem;
+  }
+  .card:hover { border-color: #fb5607; transform: translateY(-3px); box-shadow: 0 4px 20px rgba(251,86,7,0.3); }
+  .card .number { font-size: 0.5rem; color: #fb5607; }
+  .card .name { font-size: 0.75rem; }
+  .card .desc { font-size: 0.45rem; color: #aaa; line-height: 1.6; }
+  .empty { text-align: center; color: #555; font-size: 0.6rem; padding: 3rem; }
+</style>
+</head>
+<body>
+  <h1>WEIRD &amp; WACKY ARCADE</h1>
+  <p class="subtitle">AI-generated games with a twist</p>
+  <div class="grid" id="games">
+        <a class="card" href="game-01.html"><span class="number">GAME 01</span><span class="name">Handle With Suspicion</span><span class="desc">You are a mantis-shrimp customs inspector at a midnight fish dock where salmon are pouring in too fast to touch safely. Some fish are legal, some are "suspicious," and the only reliable way to secure </span></a>
+    <!-- GAMES_PLACEHOLDER -->
+  </div>
+</body>
+</html>
