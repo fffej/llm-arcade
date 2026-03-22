@@ -1,0 +1,1355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Night Raft Raid</title>
+<style>
+  :root {
+    --bg: #05070b;
+    --panel: rgba(6, 10, 16, 0.82);
+    --line: rgba(201, 233, 255, 0.16);
+    --text: #eef8ff;
+    --muted: rgba(238, 248, 255, 0.7);
+    --bone: #eee4ca;
+    --blue: #5fd7ff;
+    --blue-hot: #b3f1ff;
+    --jade: #83e49a;
+    --slime: #6ec16e;
+    --warn: #ff8b6b;
+    --gold: #ffcf72;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      radial-gradient(circle at top, rgba(85, 160, 198, 0.12), transparent 32%),
+      radial-gradient(circle at 20% 0%, rgba(89, 219, 156, 0.08), transparent 24%),
+      linear-gradient(180deg, #05070b 0%, #090d14 60%, #04060a 100%);
+    color: var(--text);
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1180px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    color: var(--text);
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: rgba(5, 8, 14, 0.76);
+    backdrop-filter: blur(6px);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    color: var(--gold);
+    border-color: rgba(255, 207, 114, 0.75);
+  }
+
+  .frame {
+    padding-top: 54px;
+  }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 26px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    background:
+      radial-gradient(circle at 30% 20%, rgba(95, 215, 255, 0.08), transparent 16%),
+      linear-gradient(180deg, rgba(8, 12, 18, 0.92), rgba(5, 7, 11, 0.98));
+    box-shadow:
+      0 26px 90px rgba(0, 0, 0, 0.5),
+      inset 0 0 80px rgba(95, 215, 255, 0.05);
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 760px) {
+    body {
+      padding: 10px;
+    }
+
+    .frame {
+      padding-top: 58px;
+    }
+
+    .back-link {
+      font-size: 13px;
+      padding: 9px 12px;
+    }
+
+    .note {
+      font-size: 12px;
+      line-height: 1.45;
+    }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1200" height="820" aria-label="Night Raft Raid"></canvas>
+      <div class="note">Move with WASD or arrows. Space starts a raid and throws on the bank. Shift dashes, reveals more, and burns raid time.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const world = { x: 44, y: 108, w: 1112, h: 656 };
+  const bank = { x: world.x, y: world.y, w: 152, h: world.h };
+  const river = { x: bank.x + bank.w, y: world.y, w: world.w - bank.w, h: world.h };
+  const raidBaseDuration = 16;
+  const keys = new Set();
+  const pressed = new Set();
+
+  const rng = {
+    range(min, max) { return min + Math.random() * (max - min); },
+    int(min, max) { return Math.floor(this.range(min, max + 1)); },
+    pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  };
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const angleTo = (ax, ay, bx, by) => Math.atan2(by - ay, bx - ax);
+  const wrapAngle = a => Math.atan2(Math.sin(a), Math.cos(a));
+
+  let state = "title";
+  let stateTimer = 0;
+  let runTime = 60;
+  let score = 0;
+  let bestScore = 0;
+  let raidActive = false;
+  let raidTime = 0;
+  let failStreak = 0;
+  let raidsFailed = 0;
+  let quickCastWindow = 0;
+  let runEndedEarly = false;
+  let worldTime = 0;
+  let lastBankState = true;
+  let message = "";
+  let messageTimer = 0;
+  let screenShake = 0;
+  let currentDifficulty = 0;
+
+  const player = {
+    x: bank.x + bank.w * 0.5,
+    y: world.y + world.h * 0.5,
+    vx: 0,
+    vy: 0,
+    facing: 0,
+    speed: 210,
+    radius: 18,
+    dashCooldown: 0,
+    dashTimer: 0,
+    bob: 0
+  };
+
+  const effigies = [];
+  const carried = [];
+  const wardens = [];
+  const whirlpools = [];
+  const slicks = [];
+  const planks = [];
+  const pulses = [];
+  const particles = [];
+  const drips = [];
+  const scorePopups = [];
+
+  function difficulty() {
+    return clamp((60 - runTime) / 60, 0, 1);
+  }
+
+  function finalRush() {
+    return runTime <= 15 ? 1 : 0;
+  }
+
+  function onBank(x = player.x) {
+    return x < bank.x + bank.w - 8;
+  }
+
+  function arenaBounds(entity, radius = 0) {
+    entity.x = clamp(entity.x, world.x + radius, world.x + world.w - radius);
+    entity.y = clamp(entity.y, world.y + radius, world.y + world.h - radius);
+  }
+
+  function clearArrays() {
+    effigies.length = 0;
+    carried.length = 0;
+    wardens.length = 0;
+    whirlpools.length = 0;
+    slicks.length = 0;
+    planks.length = 0;
+    pulses.length = 0;
+    particles.length = 0;
+    drips.length = 0;
+    scorePopups.length = 0;
+  }
+
+  function addPulse(x, y, radius, life, strength = 1, lure = 1) {
+    pulses.push({ x, y, radius, maxRadius: radius, life, maxLife: life, strength, lure });
+  }
+
+  function addMessage(text, time = 1.2) {
+    message = text;
+    messageTimer = time;
+  }
+
+  function addPopup(text, x, y, color = "#ffcf72") {
+    scorePopups.push({ text, x, y, color, life: 1.1 });
+  }
+
+  function addParticles(x, y, color, count, spread, speed) {
+    for (let i = 0; i < count; i++) {
+      const ang = rng.range(-Math.PI, Math.PI);
+      const mag = rng.range(speed * 0.4, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(ang) * mag,
+        vy: Math.sin(ang) * mag,
+        life: rng.range(0.3, 0.9),
+        maxLife: 1,
+        size: rng.range(2, 5),
+        color,
+        spread
+      });
+    }
+  }
+
+  function makePlanks() {
+    planks.length = 0;
+    const rows = [0.18, 0.36, 0.56, 0.77];
+    rows.forEach((t, index) => {
+      const y = world.y + world.h * t;
+      const broken = index === 1 || index === 2;
+      planks.push({
+        x: bank.x + bank.w + 28,
+        y,
+        w: 170,
+        h: 16,
+        broken: false,
+        crack: 0,
+        id: "entry-" + index
+      });
+      planks.push({
+        x: bank.x + bank.w + 260 + index * 30,
+        y: y + (index % 2 ? -36 : 28),
+        w: 170,
+        h: 16,
+        broken,
+        crack: broken ? 0.4 : 0,
+        id: "mid-" + index
+      });
+      planks.push({
+        x: bank.x + bank.w + 540 + (index % 2 ? -24 : 44),
+        y: y + (index % 2 ? 26 : -34),
+        w: 150,
+        h: 16,
+        broken: false,
+        crack: 0,
+        id: "far-" + index
+      });
+    });
+  }
+
+  function makeHazards() {
+    whirlpools.length = 0;
+    slicks.length = 0;
+    const d = difficulty();
+    for (let i = 0; i < 3; i++) {
+      whirlpools.push({
+        x: river.x + river.w * (0.28 + i * 0.22) + rng.range(-30, 30),
+        y: river.y + river.h * (0.24 + (i % 2) * 0.28) + rng.range(-60, 60),
+        r: 34 + i * 5,
+        phase: rng.range(0, Math.PI * 2),
+        driftX: rng.range(-18, 18),
+        driftY: rng.range(-14, 14),
+        driftTimer: rng.range(2, 5)
+      });
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const long = i >= 3 && d > 0.35;
+      slicks.push({
+        x: river.x + river.w * (0.2 + i * 0.16) + rng.range(-20, 20),
+        y: river.y + river.h * rng.range(0.16, 0.84),
+        rx: long ? 86 : 60 + rng.range(-8, 12),
+        ry: long ? 16 : 32 + rng.range(-8, 8),
+        rot: rng.range(-0.8, 0.8),
+        streak: long,
+        alpha: rng.range(0.4, 0.9)
+      });
+    }
+  }
+
+  function createEffigy(deepBias = 0) {
+    const d = difficulty();
+    const late = d > 0.62 && Math.random() < 0.3;
+    const xMin = river.x + 90 + deepBias * 110;
+    const xMax = river.x + river.w - 80;
+    const x = clamp(rng.range(xMin, xMax), river.x + 70, river.x + river.w - 60);
+    const y = rng.range(river.y + 40, river.y + river.h - 40);
+    return {
+      x,
+      y,
+      vx: rng.range(-12, 16) + (late ? -8 : 0),
+      vy: rng.range(-16, 16),
+      sway: rng.range(0, Math.PI * 2),
+      r: late ? 20 : 15,
+      purge: 0,
+      carried: false,
+      lost: false,
+      heavy: late ? 1.35 : 1,
+      oversized: late,
+      flash: 0
+    };
+  }
+
+  function makeWardens() {
+    wardens.length = 0;
+    for (let i = 0; i < 2; i++) {
+      wardens.push({
+        x: river.x + river.w * (0.55 + i * 0.18),
+        y: river.y + river.h * (0.28 + i * 0.32),
+        vx: 0,
+        vy: 0,
+        facing: rng.range(-Math.PI, Math.PI),
+        speed: 76 + i * 10,
+        targetX: river.x + river.w * (0.45 + i * 0.18),
+        targetY: river.y + river.h * (0.28 + i * 0.32),
+        curiosity: 0,
+        react: 0.9,
+        flash: 0
+      });
+    }
+  }
+
+  function resetGame() {
+    state = "title";
+    stateTimer = 0;
+    runTime = 60;
+    score = 0;
+    raidActive = false;
+    raidTime = 0;
+    failStreak = 0;
+    raidsFailed = 0;
+    quickCastWindow = 0;
+    runEndedEarly = false;
+    worldTime = 0;
+    message = "";
+    messageTimer = 0;
+    screenShake = 0;
+    currentDifficulty = 0;
+    player.x = bank.x + bank.w * 0.5;
+    player.y = world.y + world.h * 0.5;
+    player.vx = 0;
+    player.vy = 0;
+    player.facing = 0;
+    player.dashCooldown = 0;
+    player.dashTimer = 0;
+    player.bob = 0;
+    clearArrays();
+    makePlanks();
+    makeHazards();
+    makeWardens();
+    for (let i = 0; i < 7; i++) {
+      effigies.push(createEffigy(i > 3 ? 0.3 : 0));
+    }
+    addPulse(player.x, player.y, 130, 1.8, 0.8, 0.4);
+    lastBankState = true;
+  }
+
+  function startGame() {
+    resetGame();
+    state = "play";
+    addMessage("Draw your route with your own wake.", 2.4);
+  }
+
+  function endGame(early) {
+    bestScore = Math.max(bestScore, score);
+    state = "gameover";
+    stateTimer = 0;
+    runEndedEarly = early;
+    raidActive = false;
+    quickCastWindow = 0;
+  }
+
+  function startRaid() {
+    if (!onBank() || raidActive) return;
+    raidActive = true;
+    raidTime = raidBaseDuration - difficulty() * 3.5;
+    quickCastWindow = 0;
+    addMessage("Raid begun", 0.8);
+    addPulse(player.x + 20, player.y, 110, 1.6, 0.7, 0.7);
+  }
+
+  function raidFail(reason) {
+    if (!raidActive) return;
+    let lost = carried.length;
+    if (lost) {
+      score -= lost * 40;
+      addPopup("-" + lost * 40, player.x, player.y - 24, "#ff8b6b");
+    }
+    score -= 100;
+    addPopup("-100", bank.x + bank.w + 24, player.y - 16, "#ff8b6b");
+    while (carried.length) {
+      const effigy = carried.pop();
+      effigy.carried = false;
+      effigy.lost = true;
+      addParticles(effigy.x, effigy.y, "rgba(255,139,107,0.8)", 8, 1, 55);
+    }
+    raidActive = false;
+    raidTime = 0;
+    failStreak += 1;
+    raidsFailed += 1;
+    screenShake = 12;
+    addMessage(reason === "timer" ? "Raid collapsed" : "Ritual broken", 1.4);
+    if (reason === "timer") score = Math.max(score, -9999);
+    if (failStreak >= 3) {
+      endGame(true);
+    }
+  }
+
+  function throwEffigies() {
+    if (!raidActive || !onBank()) return;
+    if (!carried.length) {
+      raidActive = false;
+      raidTime = 0;
+      quickCastWindow = 0;
+      failStreak = 0;
+      addMessage("Empty return", 0.8);
+      return;
+    }
+    const count = carried.length;
+    let raidScore = 0;
+    const multiplier = count > 1 ? 2 + (count - 2) * 0.35 : 1;
+    while (carried.length) {
+      const effigy = carried.shift();
+      effigy.carried = false;
+      effigy.lost = true;
+      const value = Math.round(50 + effigy.purge * 150);
+      raidScore += value;
+      addParticles(bank.x + bank.w + 10, player.y + rng.range(-30, 30), "rgba(95,215,255,0.9)", 12, 1, 85);
+      addPulse(bank.x + bank.w + 16, player.y + rng.range(-18, 18), 140, 1.2, 1.25, 1.3);
+    }
+    raidScore = Math.round(raidScore * multiplier);
+    if (quickCastWindow > 0) {
+      raidScore += 25;
+      addPopup("+25 quick cast", bank.x + 92, player.y - 54, "#b3f1ff");
+    }
+    score += raidScore;
+    addPopup("+" + raidScore, bank.x + 84, player.y - 24, "#ffcf72");
+    addMessage(count > 1 ? "Procession cast x" + multiplier.toFixed(2) : "Effigy cast", 1);
+    failStreak = 0;
+    raidActive = false;
+    raidTime = 0;
+    quickCastWindow = 0;
+    screenShake = 6;
+  }
+
+  function spawnEffigyIfNeeded(dt) {
+    const target = 6 + Math.floor(difficulty() * 4);
+    const liveCount = effigies.filter(e => !e.lost && !e.carried).length;
+    if (liveCount >= target) return;
+    if (Math.random() < dt * (0.9 + difficulty() * 1.6)) {
+      effigies.push(createEffigy(difficulty() > 0.35 ? 0.4 : 0));
+    }
+  }
+
+  function progressDifficulty() {
+    const d = difficulty();
+    if (Math.abs(d - currentDifficulty) < 0.08) return;
+    currentDifficulty = d;
+
+    wardens.forEach((warden, index) => {
+      warden.speed = 76 + d * 56 + index * 8;
+      warden.react = Math.max(0.34, 0.9 - d * 0.45);
+    });
+
+    if (d > 0.3 && wardens.length < 3) {
+      wardens.push({
+        x: river.x + river.w * 0.78,
+        y: river.y + river.h * 0.5,
+        vx: 0,
+        vy: 0,
+        facing: 0,
+        speed: 108,
+        targetX: river.x + river.w * 0.72,
+        targetY: river.y + river.h * 0.5,
+        curiosity: 0,
+        react: 0.56,
+        flash: 0
+      });
+      addMessage("More wardens enter the channel.", 1.2);
+    }
+
+    if (d > 0.56) {
+      planks.forEach((plank, index) => {
+        if (index % 3 === 1) {
+          plank.crack = Math.max(plank.crack, 0.75);
+          plank.broken = true;
+        }
+      });
+    }
+  }
+
+  function getInputVector() {
+    let dx = 0;
+    let dy = 0;
+    if (keys.has("ArrowLeft") || keys.has("a") || keys.has("A")) dx -= 1;
+    if (keys.has("ArrowRight") || keys.has("d") || keys.has("D")) dx += 1;
+    if (keys.has("ArrowUp") || keys.has("w") || keys.has("W")) dy -= 1;
+    if (keys.has("ArrowDown") || keys.has("s") || keys.has("S")) dy += 1;
+    if (!dx && !dy) return null;
+    const mag = Math.hypot(dx, dy);
+    return { x: dx / mag, y: dy / mag };
+  }
+
+  function makeDash() {
+    if (player.dashCooldown > 0) return;
+    const dir = getInputVector() || { x: Math.cos(player.facing), y: Math.sin(player.facing) };
+    player.vx += dir.x * 360;
+    player.vy += dir.y * 360;
+    player.dashCooldown = 1.25;
+    player.dashTimer = 0.18;
+    if (raidActive) raidTime = Math.max(0, raidTime - (1.1 + difficulty() * 0.5));
+    addPulse(player.x, player.y, 220 + finalRush() * 80, 1.9, 1.6 + finalRush() * 0.5, 1.8 + finalRush() * 0.5);
+    addParticles(player.x, player.y, "rgba(95,215,255,0.75)", 18, 1.2, 120);
+    screenShake = 5;
+  }
+
+  function pointInRotatedEllipse(px, py, s) {
+    const dx = px - s.x;
+    const dy = py - s.y;
+    const c = Math.cos(-s.rot);
+    const sn = Math.sin(-s.rot);
+    const rx = dx * c - dy * sn;
+    const ry = dx * sn + dy * c;
+    return (rx * rx) / (s.rx * s.rx) + (ry * ry) / (s.ry * s.ry) <= 1;
+  }
+
+  function applyPlankCollisions(entity, radius) {
+    for (const plank of planks) {
+      if (!plank.broken) continue;
+      const gapX = plank.x + plank.w * 0.42;
+      const gapW = plank.w * 0.18;
+      const withinGap = entity.x > gapX && entity.x < gapX + gapW;
+      if (withinGap) continue;
+      const left = plank.x;
+      const right = plank.x + plank.w;
+      const top = plank.y - 5;
+      const bottom = plank.y + plank.h + 5;
+      if (entity.x + radius > left && entity.x - radius < right && entity.y + radius > top && entity.y - radius < bottom) {
+        const overlapLeft = entity.x + radius - left;
+        const overlapRight = right - (entity.x - radius);
+        const overlapTop = entity.y + radius - top;
+        const overlapBottom = bottom - (entity.y - radius);
+        const minOverlap = Math.min(overlapLeft, overlapRight, overlapTop, overlapBottom);
+        if (minOverlap === overlapLeft) entity.x = left - radius;
+        else if (minOverlap === overlapRight) entity.x = right + radius;
+        else if (minOverlap === overlapTop) entity.y = top - radius;
+        else entity.y = bottom + radius;
+      }
+    }
+  }
+
+  function updatePlayer(dt) {
+    const input = getInputVector();
+    const banked = onBank();
+    let drag = banked ? 8.8 : 6.4;
+    let maxSpeed = player.speed * (banked ? 1.02 : 1);
+    let disturbance = 0;
+    let currentX = 0;
+    let currentY = 0;
+
+    for (const slick of slicks) {
+      if (!pointInRotatedEllipse(player.x, player.y, slick)) continue;
+      if (slick.streak) {
+        maxSpeed *= 0.84;
+        disturbance += 0.4;
+      } else {
+        maxSpeed *= 0.78;
+        disturbance += 0.28;
+      }
+    }
+
+    for (const whirl of whirlpools) {
+      const d = dist(player.x, player.y, whirl.x, whirl.y);
+      if (d < whirl.r * 2.2) {
+        const ang = angleTo(whirl.x, whirl.y, player.x, player.y) + Math.PI * 0.5;
+        const pull = (1 - d / (whirl.r * 2.2)) * 90;
+        currentX += Math.cos(ang) * pull;
+        currentY += Math.sin(ang) * pull;
+        currentX += (whirl.x - player.x) * 0.15;
+        currentY += (whirl.y - player.y) * 0.15;
+        disturbance += 0.65;
+      }
+    }
+
+    if (input) {
+      player.facing = Math.atan2(input.y, input.x);
+      player.vx += input.x * maxSpeed * dt * 6.8;
+      player.vy += input.y * maxSpeed * dt * 6.8;
+      disturbance += 0.55;
+    }
+
+    player.vx += currentX * dt;
+    player.vy += currentY * dt;
+    player.vx *= Math.exp(-drag * dt);
+    player.vy *= Math.exp(-drag * dt);
+
+    const speed = Math.hypot(player.vx, player.vy);
+    if (speed > maxSpeed + (player.dashTimer > 0 ? 220 : 80)) {
+      const cap = maxSpeed + (player.dashTimer > 0 ? 220 : 80);
+      player.vx = (player.vx / speed) * cap;
+      player.vy = (player.vy / speed) * cap;
+    }
+
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+    applyPlankCollisions(player, player.radius);
+    arenaBounds(player, player.radius);
+
+    if (speed > 36) {
+      const glowBoost = 1 + finalRush() * 0.7;
+      addPulse(player.x, player.y, 90 + speed * 0.11 * glowBoost, 0.75 + (1 - difficulty()) * 0.35, 0.55 + disturbance * glowBoost, 0.65 + disturbance * glowBoost);
+      if (Math.random() < dt * 8) {
+        drips.push({
+          x: player.x + rng.range(-8, 8),
+          y: player.y + rng.range(-8, 8),
+          life: 0.5,
+          maxLife: 0.5,
+          size: rng.range(6, 12)
+        });
+      }
+    }
+
+    player.bob += dt * (2 + speed * 0.01);
+    player.dashCooldown = Math.max(0, player.dashCooldown - dt);
+    player.dashTimer = Math.max(0, player.dashTimer - dt);
+
+    const onBankNow = onBank();
+    if (raidActive && onBankNow && !lastBankState) {
+      quickCastWindow = 1;
+      addMessage("Back on the bank. Cast now.", 0.8);
+    }
+    lastBankState = onBankNow;
+  }
+
+  function updateEffigies(dt) {
+    const d = difficulty();
+    for (const effigy of effigies) {
+      if (effigy.lost) continue;
+      effigy.flash = Math.max(0, effigy.flash - dt * 2.5);
+      if (!effigy.carried) {
+        effigy.sway += dt * (0.8 + effigy.heavy * 0.3);
+        effigy.x += (effigy.vx + Math.cos(effigy.sway) * 8) * dt;
+        effigy.y += (effigy.vy + Math.sin(effigy.sway * 1.3) * 10) * dt;
+        if (effigy.x < river.x + 18 || effigy.x > river.x + river.w - 18) effigy.vx *= -1;
+        if (effigy.y < river.y + 18 || effigy.y > river.y + river.h - 18) effigy.vy *= -1;
+        effigy.x = clamp(effigy.x, river.x + 18, river.x + river.w - 18);
+        effigy.y = clamp(effigy.y, river.y + 18, river.y + river.h - 18);
+
+        if (raidActive && dist(player.x, player.y, effigy.x, effigy.y) < player.radius + effigy.r + 6) {
+          effigy.carried = true;
+          carried.push(effigy);
+          addMessage("Effigy tethered", 0.6);
+          addPulse(effigy.x, effigy.y, 120, 1.2, 1.2, 1.1);
+          addParticles(effigy.x, effigy.y, "rgba(238,228,202,0.85)", 12, 1, 80);
+          effigy.flash = 1;
+        }
+        continue;
+      }
+
+      const index = carried.indexOf(effigy);
+      const anchor = index === 0 ? player : carried[index - 1];
+      const followDist = 26 + effigy.heavy * 10 + index * 3;
+      const desiredX = anchor.x - Math.cos(anchor.facing || player.facing) * followDist;
+      const desiredY = anchor.y - Math.sin(anchor.facing || player.facing) * followDist;
+      const tension = 6 / effigy.heavy;
+      effigy.x = lerp(effigy.x, desiredX, clamp(dt * tension, 0, 1));
+      effigy.y = lerp(effigy.y, desiredY, clamp(dt * tension, 0, 1));
+      effigy.sway += dt * 3;
+      effigy.x += Math.cos(effigy.sway + index) * 7 * dt * effigy.heavy;
+      effigy.y += Math.sin(effigy.sway * 1.1 + index) * 9 * dt * effigy.heavy;
+      applyPlankCollisions(effigy, effigy.r * 0.9);
+      arenaBounds(effigy, effigy.r);
+
+      for (const slick of slicks) {
+        if (pointInRotatedEllipse(effigy.x, effigy.y, slick)) {
+          effigy.purge = clamp(effigy.purge + dt * (slick.streak ? 0.22 : 0.14) * (1 + d * 0.5), 0, 1);
+          if (Math.random() < dt * 12) addPulse(effigy.x, effigy.y, 60, 0.55, 0.35, 0.2);
+        }
+      }
+
+      for (const whirl of whirlpools) {
+        const away = dist(effigy.x, effigy.y, whirl.x, whirl.y);
+        if (away < whirl.r * 1.65) {
+          effigy.purge = clamp(effigy.purge + dt * 0.1, 0, 1);
+          const spin = angleTo(whirl.x, whirl.y, effigy.x, effigy.y) + Math.PI * 0.5;
+          effigy.x += Math.cos(spin) * dt * 18;
+          effigy.y += Math.sin(spin) * dt * 18;
+        }
+      }
+
+      if (Math.hypot(player.vx, player.vy) > 55 && Math.random() < dt * (4 + index)) {
+        addPulse(effigy.x, effigy.y, 58 + effigy.purge * 28, 0.55, 0.45 + effigy.purge * 0.4, 0.55);
+      }
+    }
+  }
+
+  function pickFlashTarget(warden) {
+    let best = null;
+    let bestScore = Infinity;
+    const lureBoost = 1 + finalRush() * 0.75;
+    for (const pulse of pulses) {
+      const distance = dist(warden.x, warden.y, pulse.x, pulse.y);
+      const signal = pulse.strength * pulse.lure * lureBoost;
+      const score = distance / Math.max(0.15, signal) + (pulse.maxLife - pulse.life) * 40;
+      if (score < bestScore) {
+        bestScore = score;
+        best = pulse;
+      }
+    }
+    if (best) {
+      warden.targetX = best.x;
+      warden.targetY = best.y;
+      warden.curiosity = 1.1 + best.strength * 0.3;
+    } else if (warden.curiosity <= 0) {
+      warden.targetX = river.x + river.w * rng.range(0.18, 0.92);
+      warden.targetY = river.y + river.h * rng.range(0.08, 0.92);
+      warden.curiosity = rng.range(0.8, 1.8);
+    }
+  }
+
+  function loseRearEffigy(reasonX, reasonY) {
+    if (!carried.length) return;
+    const effigy = carried.pop();
+    effigy.carried = false;
+    effigy.lost = true;
+    score -= 40;
+    addPopup("-40", effigy.x, effigy.y - 12, "#ff8b6b");
+    addMessage("A warden tears one free.", 0.9);
+    addPulse(reasonX, reasonY, 110, 1.1, 1.25, 1.6);
+    addParticles(effigy.x, effigy.y, "rgba(255,139,107,0.85)", 14, 1, 95);
+    screenShake = 7;
+  }
+
+  function updateWardens(dt) {
+    const d = difficulty();
+    for (const warden of wardens) {
+      warden.flash = Math.max(0, warden.flash - dt * 2);
+      warden.curiosity -= dt;
+      if (Math.random() < dt / Math.max(0.12, warden.react)) pickFlashTarget(warden);
+
+      const ang = angleTo(warden.x, warden.y, warden.targetX, warden.targetY);
+      warden.facing += wrapAngle(ang - warden.facing) * dt * 5.5;
+      const speed = warden.speed * (0.8 + Math.min(1, dist(warden.x, warden.y, warden.targetX, warden.targetY) / 180) * 0.35);
+      warden.vx = Math.cos(warden.facing) * speed;
+      warden.vy = Math.sin(warden.facing) * speed;
+
+      for (const whirl of whirlpools) {
+        const dd = dist(warden.x, warden.y, whirl.x, whirl.y);
+        if (dd < whirl.r * 1.9) {
+          const tangent = angleTo(whirl.x, whirl.y, warden.x, warden.y) + Math.PI * 0.5;
+          warden.vx += Math.cos(tangent) * 28;
+          warden.vy += Math.sin(tangent) * 28;
+        }
+      }
+
+      warden.x += warden.vx * dt;
+      warden.y += warden.vy * dt;
+      arenaBounds(warden, 14);
+      applyPlankCollisions(warden, 14);
+
+      if (Math.random() < dt * 5) addPulse(warden.x, warden.y, 54, 0.45, 0.18, 0.2);
+
+      if (carried.length) {
+        const rear = carried[carried.length - 1];
+        if (dist(warden.x, warden.y, rear.x, rear.y) < 24 + rear.r) {
+          warden.flash = 1;
+          loseRearEffigy(warden.x, warden.y);
+          warden.targetX = rear.x;
+          warden.targetY = rear.y;
+        }
+      }
+
+      if (dist(warden.x, warden.y, player.x, player.y) < 26 && player.dashTimer <= 0 && !onBank()) {
+        player.vx += Math.cos(warden.facing) * 40;
+        player.vy += Math.sin(warden.facing) * 40;
+        screenShake = 4;
+      }
+    }
+  }
+
+  function updateHazards(dt) {
+    for (const whirl of whirlpools) {
+      whirl.phase += dt * (0.6 + difficulty() * 0.5);
+      if (runTime < 15) {
+        whirl.driftTimer -= dt;
+        if (whirl.driftTimer <= 0) {
+          whirl.driftTimer = rng.range(1.4, 3.4);
+          whirl.driftX = rng.range(-26, 26);
+          whirl.driftY = rng.range(-24, 24);
+        }
+        whirl.x = clamp(whirl.x + whirl.driftX * dt, river.x + 60, river.x + river.w - 60);
+        whirl.y = clamp(whirl.y + whirl.driftY * dt, river.y + 60, river.y + river.h - 60);
+      }
+    }
+
+    if (difficulty() > 0.58) {
+      planks.forEach((plank, index) => {
+        if (index % 3 === 1) plank.crack = clamp(plank.crack + dt * 0.02, 0, 1);
+      });
+    }
+  }
+
+  function updateWorld(dt) {
+    stateTimer += dt;
+    worldTime += dt;
+    messageTimer = Math.max(0, messageTimer - dt);
+    quickCastWindow = Math.max(0, quickCastWindow - dt);
+    screenShake = Math.max(0, screenShake - dt * 22);
+    pulses.forEach(p => {
+      p.life -= dt;
+      p.radius += dt * (70 + p.maxRadius * 0.45);
+    });
+    for (let i = pulses.length - 1; i >= 0; i--) {
+      if (pulses[i].life <= 0) pulses.splice(i, 1);
+    }
+    drips.forEach(d => d.life -= dt);
+    particles.forEach(p => {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= Math.exp(-p.spread * dt);
+      p.vy *= Math.exp(-p.spread * dt);
+    });
+    scorePopups.forEach(p => {
+      p.life -= dt;
+      p.y -= dt * 36;
+    });
+    for (let i = drips.length - 1; i >= 0; i--) if (drips[i].life <= 0) drips.splice(i, 1);
+    for (let i = particles.length - 1; i >= 0; i--) if (particles[i].life <= 0) particles.splice(i, 1);
+    for (let i = scorePopups.length - 1; i >= 0; i--) if (scorePopups[i].life <= 0) scorePopups.splice(i, 1);
+
+    if (state !== "play") return;
+
+    runTime = Math.max(0, runTime - dt);
+    if (runTime <= 0) {
+      endGame(false);
+      return;
+    }
+
+    progressDifficulty();
+    updateHazards(dt);
+    updatePlayer(dt);
+    updateEffigies(dt);
+    updateWardens(dt);
+    spawnEffigyIfNeeded(dt);
+
+    if (raidActive && !onBank()) {
+      raidTime -= dt;
+      if (raidTime <= 0) raidFail("timer");
+    }
+  }
+
+  function drawBackground() {
+    ctx.fillStyle = "#070a0f";
+    ctx.fillRect(0, 0, W, H);
+
+    const bg = ctx.createLinearGradient(0, world.y, 0, world.y + world.h);
+    bg.addColorStop(0, "#09101a");
+    bg.addColorStop(1, "#06080d");
+    ctx.fillStyle = bg;
+    ctx.fillRect(world.x, world.y, world.w, world.h);
+
+    const water = ctx.createLinearGradient(river.x, river.y, river.x + river.w, river.y + river.h);
+    water.addColorStop(0, "#0a1015");
+    water.addColorStop(0.45, "#060a10");
+    water.addColorStop(1, "#04060b");
+    ctx.fillStyle = water;
+    ctx.fillRect(river.x, river.y, river.w, river.h);
+
+    ctx.fillStyle = "#17110d";
+    ctx.fillRect(bank.x, bank.y, bank.w, bank.h);
+    ctx.fillStyle = "rgba(238,228,202,0.08)";
+    for (let i = 0; i < 8; i++) {
+      ctx.fillRect(bank.x + 14 + i * 16, bank.y + 14, 8, bank.h - 28);
+    }
+
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(world.x, world.y, world.w, world.h);
+
+    ctx.strokeStyle = "rgba(238,228,202,0.18)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(bank.x + bank.w, bank.y + 10);
+    ctx.lineTo(bank.x + bank.w, bank.y + bank.h - 10);
+    ctx.stroke();
+  }
+
+  function drawPlanks() {
+    for (const plank of planks) {
+      ctx.save();
+      ctx.fillStyle = plank.broken ? "#d7c2a2" : "#eadabc";
+      ctx.fillRect(plank.x, plank.y, plank.w, plank.h);
+      ctx.fillStyle = "rgba(75, 44, 24, 0.28)";
+      for (let i = 8; i < plank.w; i += 16) {
+        ctx.fillRect(plank.x + i, plank.y, 3, plank.h);
+      }
+      if (plank.broken) {
+        const gapX = plank.x + plank.w * 0.42;
+        const gapW = plank.w * 0.18;
+        ctx.clearRect(gapX, plank.y - 2, gapW, plank.h + 4);
+        ctx.strokeStyle = "rgba(68, 36, 18, 0.65)";
+        ctx.lineWidth = 2;
+        for (let i = 0; i < 4; i++) {
+          ctx.beginPath();
+          ctx.moveTo(gapX - 10 + i * 5, plank.y + 1);
+          ctx.lineTo(gapX + 8 + i * 2, plank.y + plank.h - 2);
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(gapX + gapW + 10 - i * 5, plank.y + 1);
+          ctx.lineTo(gapX + gapW - 8 - i * 2, plank.y + plank.h - 2);
+          ctx.stroke();
+        }
+      }
+      ctx.restore();
+    }
+  }
+
+  function drawHazardsAndEffigies() {
+    for (const slick of slicks) {
+      ctx.save();
+      ctx.translate(slick.x, slick.y);
+      ctx.rotate(slick.rot);
+      const g = ctx.createRadialGradient(0, 0, 4, 0, 0, slick.rx);
+      g.addColorStop(0, "rgba(126, 212, 112, " + (0.15 + slick.alpha * 0.2) + ")");
+      g.addColorStop(0.55, "rgba(99, 170, 81, " + (0.11 + slick.alpha * 0.18) + ")");
+      g.addColorStop(1, "rgba(60, 86, 47, 0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.ellipse(0, 0, slick.rx, slick.ry, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    for (const whirl of whirlpools) {
+      ctx.save();
+      ctx.translate(whirl.x, whirl.y);
+      for (let i = 0; i < 4; i++) {
+        ctx.strokeStyle = "rgba(95,215,255," + (0.11 + i * 0.05) + ")";
+        ctx.lineWidth = 2 - i * 0.2;
+        ctx.beginPath();
+        ctx.arc(0, 0, whirl.r - i * 5 + Math.sin(whirl.phase + i) * 3, whirl.phase + i * 0.6, whirl.phase + Math.PI * 1.55 + i * 0.65);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+
+    for (const effigy of effigies) {
+      if (effigy.lost) continue;
+      drawEffigy(effigy);
+    }
+
+    for (const warden of wardens) drawWarden(warden);
+    drawPlayer();
+  }
+
+  function drawEffigy(effigy) {
+    const stain = Math.round(220 - effigy.purge * 120);
+    ctx.save();
+    ctx.translate(effigy.x, effigy.y);
+    ctx.rotate(Math.sin(effigy.sway) * 0.18);
+    ctx.strokeStyle = "rgba(" + stain + "," + stain + "," + Math.round(200 - effigy.purge * 80) + ",0.95)";
+    ctx.lineWidth = effigy.oversized ? 4 : 3;
+    ctx.beginPath();
+    ctx.moveTo(0, -effigy.r);
+    ctx.lineTo(0, effigy.r);
+    ctx.moveTo(-effigy.r * 0.7, -3);
+    ctx.lineTo(effigy.r * 0.7, 3);
+    ctx.moveTo(-effigy.r * 0.45, effigy.r + 2);
+    ctx.lineTo(-effigy.r * 0.15, effigy.r * 1.45);
+    ctx.moveTo(effigy.r * 0.45, effigy.r + 2);
+    ctx.lineTo(effigy.r * 0.15, effigy.r * 1.45);
+    ctx.stroke();
+
+    ctx.fillStyle = "rgba(" + stain + "," + Math.round(stain * 0.96) + "," + Math.round(stain * 0.84) + ",0.95)";
+    ctx.beginPath();
+    ctx.arc(0, -effigy.r - 3, effigy.oversized ? 8 : 6, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (effigy.carried) {
+      ctx.fillStyle = "rgba(95,215,255," + (0.18 + effigy.purge * 0.3) + ")";
+      ctx.beginPath();
+      ctx.arc(0, 0, effigy.r + 6, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    const meterW = effigy.oversized ? 28 : 22;
+    ctx.fillStyle = "rgba(0,0,0,0.45)";
+    ctx.fillRect(-meterW / 2, effigy.r + 12, meterW, 5);
+    ctx.fillStyle = "#7fe58f";
+    ctx.fillRect(-meterW / 2, effigy.r + 12, meterW * effigy.purge, 5);
+    ctx.restore();
+  }
+
+  function drawWarden(warden) {
+    ctx.save();
+    ctx.translate(warden.x, warden.y);
+    ctx.rotate(warden.facing);
+    ctx.fillStyle = "rgba(17, 24, 28, 0.92)";
+    ctx.beginPath();
+    ctx.moveTo(16, 0);
+    ctx.quadraticCurveTo(2, 15, -18, 12);
+    ctx.quadraticCurveTo(-12, 0, -18, -12);
+    ctx.quadraticCurveTo(2, -15, 16, 0);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(179,241,255,0.65)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-6, -6);
+    ctx.lineTo(12, 0);
+    ctx.lineTo(-6, 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPlayer() {
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.rotate(player.facing);
+
+    ctx.fillStyle = "rgba(238,228,202,0.14)";
+    ctx.beginPath();
+    ctx.arc(0, 0, 30 + Math.sin(player.bob * 2) * 2, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#eadabc";
+    ctx.beginPath();
+    ctx.moveTo(24, 0);
+    ctx.lineTo(6, -14);
+    ctx.lineTo(-18, -16);
+    ctx.lineTo(-24, 0);
+    ctx.lineTo(-18, 16);
+    ctx.lineTo(6, 14);
+    ctx.closePath();
+    ctx.fill();
+
+    ctx.strokeStyle = "#5b4222";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.fillStyle = "#1c120b";
+    ctx.beginPath();
+    ctx.arc(-6, 0, 8, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = "#f6f0db";
+    ctx.fillRect(-3, -10, 8, 20);
+
+    if (player.dashTimer > 0) {
+      ctx.strokeStyle = "rgba(95,215,255,0.75)";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(-32, 0);
+      ctx.lineTo(-60, 0);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(215, 241, 255, 0.35)";
+    ctx.lineWidth = 1.5;
+    let anchor = player;
+    for (const effigy of carried) {
+      ctx.beginPath();
+      ctx.moveTo(anchor.x, anchor.y);
+      ctx.quadraticCurveTo((anchor.x + effigy.x) * 0.5, (anchor.y + effigy.y) * 0.5 + 10, effigy.x, effigy.y);
+      ctx.stroke();
+      anchor = effigy;
+    }
+  }
+
+  function drawParticles() {
+    for (const drip of drips) {
+      ctx.fillStyle = "rgba(95,215,255," + (drip.life / drip.maxLife * 0.24) + ")";
+      ctx.beginPath();
+      ctx.arc(drip.x, drip.y, drip.size * (drip.life / drip.maxLife), 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    for (const p of particles) {
+      ctx.fillStyle = p.color.replace("0.8", (p.life / p.maxLife * 0.9).toFixed(2)).replace("0.75", (p.life / p.maxLife * 0.85).toFixed(2)).replace("0.85", (p.life / p.maxLife * 0.9).toFixed(2)).replace("0.9", (p.life / p.maxLife * 0.95).toFixed(2));
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size * Math.max(0.2, p.life), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function drawHud() {
+    ctx.fillStyle = "rgba(4, 8, 14, 0.74)";
+    ctx.fillRect(world.x, 30, world.w, 58);
+    ctx.strokeStyle = "rgba(255,255,255,0.08)";
+    ctx.strokeRect(world.x, 30, world.w, 58);
+
+    ctx.fillStyle = "#eef8ff";
+    ctx.font = "bold 20px Georgia, serif";
+    ctx.fillText("NIGHT RAFT RAID", world.x + 22, 58);
+
+    ctx.font = "16px Georgia, serif";
+    ctx.fillStyle = "rgba(238,248,255,0.88)";
+    ctx.fillText("Score " + score, world.x + 24, 82);
+    ctx.fillText("Run " + runTime.toFixed(1) + "s", world.x + 156, 82);
+    ctx.fillText("Carry " + carried.length, world.x + 272, 82);
+    ctx.fillText("Broken Raids " + failStreak + "/3", world.x + 384, 82);
+
+    const raidX = world.x + 620;
+    const raidW = 250;
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(raidX, 52, raidW, 16);
+    if (raidActive) {
+      const pct = clamp(raidTime / (raidBaseDuration - difficulty() * 3.5), 0, 1);
+      const g = ctx.createLinearGradient(raidX, 0, raidX + raidW, 0);
+      g.addColorStop(0, "#ff8b6b");
+      g.addColorStop(1, "#ffcf72");
+      ctx.fillStyle = g;
+      ctx.fillRect(raidX, 52, raidW * pct, 16);
+      ctx.fillStyle = "#eef8ff";
+      ctx.fillText("Raid " + raidTime.toFixed(1) + "s", raidX, 84);
+    } else {
+      ctx.fillStyle = "rgba(238,248,255,0.68)";
+      ctx.fillText(onBank() ? "Space to begin raid" : "Return to bank to begin", raidX, 84);
+    }
+
+    ctx.fillStyle = "rgba(238,248,255,0.84)";
+    ctx.fillText("Dash", world.x + 922, 58);
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(world.x + 922, 66, 180, 12);
+    ctx.fillStyle = player.dashCooldown > 0 ? "#7b8a96" : "#5fd7ff";
+    ctx.fillRect(world.x + 922, 66, 180 * (1 - player.dashCooldown / 1.25), 12);
+
+    if (messageTimer > 0) {
+      ctx.fillStyle = "rgba(4, 8, 14, 0.72)";
+      ctx.fillRect(world.x + world.w * 0.32, world.y + world.h + 10, world.w * 0.36, 32);
+      ctx.fillStyle = "#b3f1ff";
+      ctx.textAlign = "center";
+      ctx.fillText(message, world.x + world.w * 0.5, world.y + world.h + 32);
+      ctx.textAlign = "left";
+    }
+
+    for (const popup of scorePopups) {
+      ctx.save();
+      ctx.globalAlpha = popup.life;
+      ctx.fillStyle = popup.color;
+      ctx.font = "bold 18px Georgia, serif";
+      ctx.fillText(popup.text, popup.x, popup.y);
+      ctx.restore();
+    }
+  }
+
+  function drawDarkness() {
+    const roughness = finalRush() ? 0.16 : 0.08;
+    ctx.save();
+    ctx.fillStyle = "rgba(1, 2, 4, 0.86)";
+    ctx.fillRect(world.x, world.y, world.w, world.h);
+    ctx.globalCompositeOperation = "destination-out";
+    for (const pulse of pulses) {
+      const alpha = clamp((pulse.life / pulse.maxLife) * pulse.strength, 0, 1);
+      const g = ctx.createRadialGradient(pulse.x, pulse.y, 0, pulse.x, pulse.y, pulse.radius);
+      g.addColorStop(0, "rgba(0,0,0," + (alpha * 0.96) + ")");
+      g.addColorStop(0.45, "rgba(0,0,0," + (alpha * 0.55) + ")");
+      g.addColorStop(1, "rgba(0,0,0,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(pulse.x, pulse.y, pulse.radius, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.strokeStyle = "rgba(95,215,255," + (0.06 + roughness) + ")";
+    ctx.lineWidth = 1;
+    for (let x = river.x + 10; x < river.x + river.w; x += 18) {
+      ctx.beginPath();
+      ctx.moveTo(x, river.y);
+      for (let y = river.y; y <= river.y + river.h; y += 24) {
+        ctx.lineTo(x + Math.sin(y * 0.03 + worldTime * 1.4 + x * 0.01) * 5, y);
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTitleScreen() {
+    ctx.fillStyle = "rgba(0,0,0,0.52)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#eef8ff";
+    ctx.font = "bold 58px Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Night Raft Raid", W / 2, 180);
+
+    ctx.font = "italic 24px Georgia, serif";
+    ctx.fillStyle = "#b3f1ff";
+    ctx.fillText("Make the map by disturbing it.", W / 2, 222);
+
+    const boxX = 170;
+    const boxY = 270;
+    const boxW = W - 340;
+    const boxH = 300;
+    ctx.fillStyle = "rgba(5, 8, 14, 0.82)";
+    ctx.fillRect(boxX, boxY, boxW, boxH);
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.strokeRect(boxX, boxY, boxW, boxH);
+
+    ctx.textAlign = "left";
+    ctx.fillStyle = "#eef8ff";
+    ctx.font = "20px Georgia, serif";
+    const lines = [
+      "Press Space on the shrine bank to begin each raid.",
+      "Snatch drifting effigies, stain them in corruption, and get back before the raid timer ends.",
+      "Space again on the bank throws everything you carry back into the river for points.",
+      "Shift dashes and reveals a wider route, but it burns raid time and calls wardens from farther away.",
+      "Wardens chase fresh flashes, not you. Your wake is both your vision and your betrayal.",
+      "Three collapsed raids in a row end the ritual early."
+    ];
+    lines.forEach((line, index) => {
+      ctx.fillText(line, boxX + 36, boxY + 56 + index * 38);
+    });
+
+    ctx.fillStyle = "rgba(255, 207, 114, 0.95)";
+    ctx.font = "bold 26px Georgia, serif";
+    ctx.textAlign = "center";
+    ctx.fillText("Press Space to Begin", W / 2, 642);
+    ctx.font = "18px Georgia, serif";
+    ctx.fillStyle = "rgba(238,248,255,0.76)";
+    ctx.fillText("Best score " + bestScore, W / 2, 680);
+    ctx.textAlign = "left";
+  }
+
+  function drawGameOver() {
+    ctx.fillStyle = "rgba(0,0,0,0.58)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "#eef8ff";
+    ctx.textAlign = "center";
+    ctx.font = "bold 56px Georgia, serif";
+    ctx.fillText(runEndedEarly ? "Ritual Disgrace" : "Run Complete", W / 2, 212);
+    ctx.font = "24px Georgia, serif";
+    ctx.fillStyle = runEndedEarly ? "#ff8b6b" : "#b3f1ff";
+    ctx.fillText(runEndedEarly ? "Three raids collapsed in succession." : "The river closes for dawn.", W / 2, 256);
+
+    ctx.fillStyle = "rgba(5, 8, 14, 0.84)";
+    ctx.fillRect(W / 2 - 220, 310, 440, 180);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(W / 2 - 220, 310, 440, 180);
+
+    ctx.fillStyle = "#ffcf72";
+    ctx.font = "bold 34px Georgia, serif";
+    ctx.fillText("Score " + score, W / 2, 378);
+    ctx.fillStyle = "#eef8ff";
+    ctx.font = "22px Georgia, serif";
+    ctx.fillText("Best " + bestScore, W / 2, 420);
+    ctx.fillText("Failed raids " + raidsFailed, W / 2, 456);
+
+    ctx.fillStyle = "#b3f1ff";
+    ctx.font = "bold 24px Georgia, serif";
+    ctx.fillText("Press Space to Play Again", W / 2, 580);
+    ctx.textAlign = "left";
+  }
+
+  function render() {
+    const shakeX = screenShake ? rng.range(-screenShake, screenShake) : 0;
+    const shakeY = screenShake ? rng.range(-screenShake, screenShake) : 0;
+    ctx.save();
+    ctx.translate(shakeX, shakeY);
+    drawBackground();
+    drawPlanks();
+    drawHazardsAndEffigies();
+    drawParticles();
+    drawDarkness();
+    drawHud();
+    if (state === "title") drawTitleScreen();
+    if (state === "gameover") drawGameOver();
+    ctx.restore();
+  }
+
+  function handlePressed() {
+    if (pressed.has("Shift")) makeDash();
+    if (pressed.has(" ")) {
+      if (state === "title") startGame();
+      else if (state === "gameover") startGame();
+      else if (state === "play") {
+        if (!raidActive && onBank()) startRaid();
+        else if (raidActive && onBank()) throwEffigies();
+      }
+    }
+    pressed.clear();
+  }
+
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+    handlePressed();
+    updateWorld(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", event => {
+    if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "Shift"].includes(event.key)) event.preventDefault();
+    keys.add(event.key);
+    pressed.add(event.key);
+  }, { passive: false });
+
+  window.addEventListener("keyup", event => {
+    keys.delete(event.key);
+  });
+
+  resetGame();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
