@@ -1,0 +1,1267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Shade Signal Panic</title>
+<style>
+  :root {
+    --bg0: #070707;
+    --bg1: #17120d;
+    --bg2: #2d2217;
+    --ink: #f7efd9;
+    --muted: rgba(247, 239, 217, 0.72);
+    --cream: #e1d3ad;
+    --amber: #f3a93c;
+    --hot: #ffd36d;
+    --cyan: #69f4ff;
+    --magenta: #ff58cb;
+    --danger: #ff725f;
+    --panel: rgba(16, 13, 10, 0.82);
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    color: var(--ink);
+    font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+    background:
+      radial-gradient(circle at 50% -10%, rgba(255, 211, 109, 0.14), transparent 26%),
+      radial-gradient(circle at 15% 20%, rgba(255, 88, 203, 0.08), transparent 20%),
+      radial-gradient(circle at 85% 18%, rgba(105, 244, 255, 0.08), transparent 20%),
+      linear-gradient(180deg, #050505 0%, #120f0a 38%, #050505 100%);
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    position: relative;
+    width: min(1340px, 100%);
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(247, 239, 217, 0.16);
+    color: var(--ink);
+    text-decoration: none;
+    background: rgba(15, 13, 10, 0.86);
+    backdrop-filter: blur(8px);
+    letter-spacing: 0.04em;
+    font-size: 14px;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    color: var(--hot);
+    border-color: rgba(255, 211, 109, 0.72);
+  }
+
+  .frame { padding-top: 54px; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(247, 239, 217, 0.08);
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.5),
+      inset 0 0 120px rgba(255, 211, 109, 0.03);
+    background:
+      radial-gradient(circle at 50% 24%, rgba(255, 211, 109, 0.05), transparent 24%),
+      linear-gradient(180deg, rgba(36, 28, 20, 0.98), rgba(6, 6, 6, 1));
+  }
+
+  .note {
+    margin-top: 12px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.03em;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; line-height: 1.5; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="900" aria-label="Shade Signal Panic"></canvas>
+      <div class="note">Left/Right rotate queued dash by 45°. Space dash. Z/X choose spin. Shift uses PROOF STRIP. Enter or Space starts and restarts.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const CX = W * 0.5;
+  const CY = H * 0.55;
+  const BOARD_COLS = 6;
+  const BOARD_ROWS = 6;
+  const PAD_W = 118;
+  const PAD_H = 102;
+  const GAP = 12;
+  const MISREAD_MAX = 100;
+  const ROUND_LENGTH = 60;
+  const ANGLE_STEP = Math.PI / 4;
+  const SUN_RADIUS_X = 470;
+  const SUN_RADIUS_Y = 328;
+
+  const TAU = Math.PI * 2;
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const rand = (min, max) => min + Math.random() * (max - min);
+  const randInt = (min, max) => Math.floor(rand(min, max + 1));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const shuffle = (arr) => {
+    for (let i = arr.length - 1; i > 0; i -= 1) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  };
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const angleDiff = (a, b) => {
+    let d = a - b;
+    while (d > Math.PI) d -= TAU;
+    while (d < -Math.PI) d += TAU;
+    return d;
+  };
+  const formatAngle = (angleIndex) => `${angleIndex * 45}°`;
+
+  const shadePalette = [
+    { key: 0, base: "#4e4a46", lit: "#b7a273", shadow: "#292522" },
+    { key: 1, base: "#6d665d", lit: "#d4c397", shadow: "#36302b" },
+    { key: 2, base: "#878078", lit: "#ede1ba", shadow: "#48403a" },
+    { key: 3, base: "#5c574f", lit: "#c9b788", shadow: "#2f2a27" }
+  ];
+  const spinColors = {
+    open: "#f5ead0",
+    left: "#69f4ff",
+    right: "#ff58cb"
+  };
+
+  const pads = [];
+  const padById = new Map();
+  const particles = [];
+  const popups = [];
+  const trail = [];
+  let activePairs = [];
+  let activePairIds = new Set();
+  let screen = "title";
+  let lastTime = 0;
+  let elapsed = 0;
+  let timeLeft = ROUND_LENGTH;
+  let score = 0;
+  let best = Number(localStorage.getItem("shade-signal-panic-best") || 0);
+  let misread = 0;
+  let combo = 0;
+  let comboMult = 1;
+  let sunAngle = -Math.PI / 2;
+  let sunSpeed = 0.28;
+  let queuedAngle = 0;
+  let selectedSpin = "left";
+  let proofTimer = 0;
+  let proofCooldown = 0;
+  let proofSweep = 0;
+  let proofUsedSinceChain = false;
+  let lastPairSuccessTime = -10;
+  let stunTimer = 0;
+  let pulseText = "";
+  let pulseTimer = 0;
+  let endReason = "Signal lost.";
+  let difficulty = 0;
+
+  const player = {
+    padId: 0,
+    targetPadId: null,
+    x: 0,
+    y: 0,
+    fromX: 0,
+    fromY: 0,
+    toX: 0,
+    toY: 0,
+    anim: 1,
+    dashTime: 0.18,
+    moving: false,
+    rejected: false,
+    returnX: 0,
+    returnY: 0,
+    speedBoost: 0,
+    chargedPairId: null,
+    chargedPadId: null,
+    chargedSpinOk: false
+  };
+
+  function createBoard() {
+    let id = 0;
+    const startX = CX - ((BOARD_COLS * PAD_W) + ((BOARD_COLS - 1) * GAP)) * 0.5;
+    const startY = CY - ((BOARD_ROWS * PAD_H) + ((BOARD_ROWS - 1) * GAP)) * 0.54;
+    for (let row = 0; row < BOARD_ROWS; row += 1) {
+      for (let col = 0; col < BOARD_COLS; col += 1) {
+        const x = startX + col * (PAD_W + GAP);
+        const y = startY + row * (PAD_H + GAP);
+        const corners = createPadCorners(col, row, x, y);
+        const center = corners.reduce((acc, p) => ({ x: acc.x + p.x / 4, y: acc.y + p.y / 4 }), { x: 0, y: 0 });
+        const pad = {
+          id,
+          row,
+          col,
+          corners,
+          x: center.x,
+          y: center.y,
+          radius: 42,
+          trueShade: id % shadePalette.length,
+          shadowBias: rand(-0.9, 0.9),
+          apparentOffset: 0,
+          spin: "open",
+          pairId: null,
+          pairIndex: -1,
+          charged: false,
+          isDecoy: false,
+          acceptFlash: 0,
+          rejectFlash: 0,
+          spawnFlash: rand(0, 1),
+          hintFlash: 0
+        };
+        pads.push(pad);
+        padById.set(id, pad);
+        id += 1;
+      }
+    }
+  }
+
+  function createPadCorners(col, row, x, y) {
+    const skewX = (row - (BOARD_ROWS - 1) * 0.5) * 11;
+    const skewY = (col - (BOARD_COLS - 1) * 0.5) * 7;
+    const wobble = Math.sin((col + 1) * 1.3 + row * 0.7) * 7;
+    const tilt = Math.cos(row * 1.4 - col * 0.8) * 8;
+    return [
+      { x: x + skewX - 6, y: y + skewY - 8 + wobble * 0.2 },
+      { x: x + PAD_W + skewX + 4, y: y + skewY + tilt * 0.16 },
+      { x: x + PAD_W + skewX + 10, y: y + PAD_H + skewY + 10 + wobble * 0.2 },
+      { x: x + skewX - 10, y: y + PAD_H + skewY + 6 - tilt * 0.12 }
+    ];
+  }
+
+  function resetPadStates() {
+    for (const pad of pads) {
+      pad.charged = false;
+      pad.pairId = null;
+      pad.pairIndex = -1;
+      pad.isDecoy = false;
+      pad.spin = "open";
+      pad.acceptFlash = 0;
+      pad.rejectFlash = 0;
+      pad.hintFlash = 0;
+    }
+    activePairs = [];
+    activePairIds = new Set();
+  }
+
+  function stageFromTime() {
+    return 1 - (timeLeft / ROUND_LENGTH);
+  }
+
+  function currentPairCount() {
+    if (difficulty < 0.22) return 2;
+    if (difficulty < 0.48) return 3;
+    if (difficulty < 0.78) return 4;
+    return 5;
+  }
+
+  function spawnAllPairs() {
+    while (activePairs.length < currentPairCount()) {
+      spawnPair();
+    }
+  }
+
+  function openPads() {
+    return pads.filter((pad) => pad.pairId === null);
+  }
+
+  function spawnPair() {
+    const available = shuffle(openPads().slice());
+    if (available.length < 2) return;
+
+    let a = null;
+    let b = null;
+    for (let i = 0; i < available.length; i += 1) {
+      for (let j = i + 1; j < available.length; j += 1) {
+        const pa = available[i];
+        const pb = available[j];
+        if (dist(pa.x, pa.y, pb.x, pb.y) < 170) continue;
+        a = pa;
+        b = pb;
+        break;
+      }
+      if (a && b) break;
+    }
+    if (!a || !b) {
+      a = available[0];
+      b = available[1];
+    }
+
+    const pairId = `pair-${Math.random().toString(36).slice(2, 8)}`;
+    const trueShade = randInt(0, shadePalette.length - 1);
+    const hard = difficulty > 0.72 && Math.random() < 0.45;
+    const lockChance = difficulty < 0.2 ? 0.15 : difficulty < 0.5 ? 0.45 : 0.75;
+    const lockPool = difficulty < 0.3 ? ["open", "open", "left", "right"] : ["open", "left", "right"];
+
+    a.pairId = pairId;
+    b.pairId = pairId;
+    a.pairIndex = 0;
+    b.pairIndex = 1;
+    a.trueShade = trueShade;
+    b.trueShade = trueShade;
+    a.isDecoy = false;
+    b.isDecoy = false;
+    a.spin = Math.random() < lockChance ? pick(lockPool) : "open";
+    b.spin = hard ? pick(["left", "right"]) : (Math.random() < lockChance ? pick(lockPool) : "open");
+    if (hard) a.spin = pick(["left", "right"]);
+    a.shadowBias = rand(-1, 1);
+    b.shadowBias = rand(-1, 1);
+    a.apparentOffset = a.shadowBias > 0 ? 1 : -1;
+    b.apparentOffset = b.shadowBias > 0 ? -1 : 1;
+    a.spawnFlash = 1;
+    b.spawnFlash = 1;
+
+    const pair = {
+      id: pairId,
+      pads: [a.id, b.id],
+      trueShade,
+      hard,
+      firstLockRequired: hard,
+      secondLockRequired: hard
+    };
+    activePairs.push(pair);
+    activePairIds.add(pairId);
+
+    addDecoys(pair);
+  }
+
+  function addDecoys(pair) {
+    const decoyCount = difficulty < 0.35 ? 1 : difficulty < 0.7 ? 2 : 3;
+    const candidates = shuffle(openPads().filter((pad) => {
+      return pair.pads.every((id) => dist(pad.x, pad.y, padById.get(id).x, padById.get(id).y) > 100);
+    }));
+    for (let i = 0; i < Math.min(decoyCount, candidates.length); i += 1) {
+      const pad = candidates[i];
+      pad.isDecoy = true;
+      pad.trueShade = randInt(0, shadePalette.length - 1);
+      if (pad.trueShade === pair.trueShade) pad.trueShade = (pad.trueShade + 1) % shadePalette.length;
+      pad.apparentOffset = Math.random() < 0.5 ? 0 : (Math.random() < 0.5 ? 1 : -1);
+      pad.shadowBias = rand(-1, 1);
+      pad.spin = difficulty > 0.45 && Math.random() < 0.45 ? pick(["left", "right", "open"]) : "open";
+      pad.spawnFlash = 0.7;
+    }
+  }
+
+  function resetRun() {
+    screen = "play";
+    elapsed = 0;
+    timeLeft = ROUND_LENGTH;
+    score = 0;
+    misread = 0;
+    combo = 0;
+    comboMult = 1;
+    sunAngle = -Math.PI / 2;
+    sunSpeed = 0.28;
+    queuedAngle = 0;
+    selectedSpin = "left";
+    proofTimer = 0;
+    proofCooldown = 0;
+    proofSweep = 0;
+    proofUsedSinceChain = false;
+    stunTimer = 0;
+    pulseText = "";
+    pulseTimer = 0;
+    trail.length = 0;
+    particles.length = 0;
+    popups.length = 0;
+    difficulty = 0;
+    resetPadStates();
+    spawnAllPairs();
+
+    const startPad = pads[Math.floor(BOARD_ROWS * 0.5) * BOARD_COLS + Math.floor(BOARD_COLS * 0.5)];
+    player.padId = startPad.id;
+    player.targetPadId = null;
+    player.x = startPad.x;
+    player.y = startPad.y;
+    player.fromX = startPad.x;
+    player.fromY = startPad.y;
+    player.toX = startPad.x;
+    player.toY = startPad.y;
+    player.anim = 1;
+    player.dashTime = 0.18;
+    player.moving = false;
+    player.rejected = false;
+    player.returnX = startPad.x;
+    player.returnY = startPad.y;
+    player.speedBoost = 0;
+    player.chargedPairId = null;
+    player.chargedPadId = null;
+    player.chargedSpinOk = false;
+  }
+
+  function finishRun(reason) {
+    endReason = reason;
+    screen = "gameover";
+    if (score > best) {
+      best = score;
+      localStorage.setItem("shade-signal-panic-best", String(best));
+    }
+  }
+
+  function canAct() {
+    return screen === "play" && !player.moving && stunTimer <= 0;
+  }
+
+  function useProofStrip() {
+    if (screen !== "play" || proofCooldown > 0 || proofTimer > 0) return;
+    proofTimer = 0.5;
+    proofSweep = 0;
+    proofCooldown = difficulty > 0.82 ? 8.5 : difficulty > 0.55 ? 6.8 : 5.2;
+    proofUsedSinceChain = true;
+    pulseText = "PROOF STRIP";
+    pulseTimer = 0.8;
+  }
+
+  function queuedWorldAngle() {
+    return sunAngle + queuedAngle * ANGLE_STEP;
+  }
+
+  function sunPosition() {
+    return {
+      x: CX + Math.cos(sunAngle) * SUN_RADIUS_X,
+      y: CY + Math.sin(sunAngle) * SUN_RADIUS_Y
+    };
+  }
+
+  function findDashTarget() {
+    const origin = padById.get(player.padId);
+    const angle = queuedWorldAngle();
+    const dirX = Math.cos(angle);
+    const dirY = Math.sin(angle);
+    let bestPad = null;
+    let bestScore = Infinity;
+    for (const pad of pads) {
+      if (pad.id === origin.id) continue;
+      const dx = pad.x - origin.x;
+      const dy = pad.y - origin.y;
+      const forward = dx * dirX + dy * dirY;
+      if (forward < 68) continue;
+      const side = Math.abs(dx * dirY - dy * dirX);
+      if (side > 74) continue;
+      const scoreValue = forward + side * 1.7;
+      if (scoreValue < bestScore) {
+        bestScore = scoreValue;
+        bestPad = pad;
+      }
+    }
+    return bestPad;
+  }
+
+  function dash() {
+    if (!canAct()) return;
+    const origin = padById.get(player.padId);
+    const target = findDashTarget();
+    if (!target) {
+      player.targetPadId = null;
+      score = Math.max(0, score - 50);
+      misread = clamp(misread + 18, 0, MISREAD_MAX);
+      combo = 0;
+      comboMult = 1;
+      proofUsedSinceChain = true;
+      pulseText = "OFF-BOARD -50";
+      pulseTimer = 0.9;
+      spawnBurst(origin.x + Math.cos(queuedWorldAngle()) * 52, origin.y + Math.sin(queuedWorldAngle()) * 52, "#ff725f", 16, 5.5);
+      if (misread >= MISREAD_MAX) finishRun("Misread meter maxed.");
+      return;
+    }
+
+    player.fromX = origin.x;
+    player.fromY = origin.y;
+    player.targetPadId = target.id;
+    player.toX = target.x;
+    player.toY = target.y;
+    player.returnX = origin.x;
+    player.returnY = origin.y;
+    player.anim = 0;
+    player.moving = true;
+    player.rejected = false;
+    player.dashTime = Math.max(0.09, 0.19 - player.speedBoost * 0.05);
+    player.speedBoost = Math.max(0, player.speedBoost - 0.35);
+    trail.push({
+      x1: origin.x,
+      y1: origin.y,
+      x2: target.x,
+      y2: target.y,
+      spin: selectedSpin,
+      life: 0.28,
+      curve: rand(-34, 34)
+    });
+  }
+
+  function handleLanding(targetPad) {
+    player.targetPadId = null;
+    let lockedBonus = 0;
+    const lockMismatch = targetPad.spin !== "open" && targetPad.spin !== selectedSpin;
+    if (lockMismatch) {
+      targetPad.rejectFlash = 1;
+      score = Math.max(0, score - 20);
+      misread = clamp(misread + 14, 0, MISREAD_MAX);
+      combo = 0;
+      comboMult = 1;
+      player.rejected = true;
+      player.fromX = targetPad.x;
+      player.fromY = targetPad.y;
+      player.toX = player.returnX;
+      player.toY = player.returnY;
+      player.anim = 0;
+      player.moving = true;
+      player.dashTime = 0.12;
+      stunTimer = 0.45;
+      proofUsedSinceChain = true;
+      pulseText = "WRONG SPIN -20";
+      pulseTimer = 0.9;
+      spawnShock(targetPad.x, targetPad.y);
+      if (misread >= MISREAD_MAX) finishRun("Rejected by polarized locks.");
+      return;
+    }
+
+    player.padId = targetPad.id;
+    targetPad.acceptFlash = 1;
+    if (targetPad.spin !== "open" && targetPad.spin === selectedSpin) {
+      lockedBonus = 25;
+      score += 25;
+      player.speedBoost = Math.min(1.5, player.speedBoost + 0.6);
+      spawnBurst(targetPad.x, targetPad.y, spinColors[selectedSpin], 12, 4);
+      addPopup(targetPad.x, targetPad.y - 14, "+25 CHANNEL", spinColors[selectedSpin]);
+    } else {
+      spawnBurst(targetPad.x, targetPad.y, "#ffd36d", 8, 3.2);
+    }
+
+    if (!targetPad.pairId) {
+      if (player.chargedPairId && targetPad.isDecoy) {
+        score = Math.max(0, score - 30);
+        misread = clamp(misread + 10, 0, MISREAD_MAX);
+        combo = 0;
+        comboMult = 1;
+        proofUsedSinceChain = true;
+        pulseText = "DECOY -30";
+        pulseTimer = 0.8;
+        targetPad.rejectFlash = 0.7;
+        addPopup(targetPad.x, targetPad.y - 8, "-30 DECOY", "#ff725f");
+      }
+      if (misread >= MISREAD_MAX) finishRun("Decoys overwhelmed the signal.");
+      return;
+    }
+
+    const pair = activePairs.find((entry) => entry.id === targetPad.pairId);
+    if (!pair) return;
+
+    if (player.chargedPairId === null || player.chargedPairId !== pair.id) {
+      clearChargedPads();
+      player.chargedPairId = pair.id;
+      player.chargedPadId = targetPad.id;
+      player.chargedSpinOk = targetPad.spin !== "open" ? selectedSpin === targetPad.spin : !pair.firstLockRequired;
+      targetPad.charged = true;
+      targetPad.hintFlash = 1;
+      pulseText = pair.hard ? "HARD PAIR ARMED" : "PAIR ARMED";
+      pulseTimer = 0.65;
+      return;
+    }
+
+    if (player.chargedPadId === targetPad.id) {
+      targetPad.hintFlash = 0.4;
+      return;
+    }
+
+    const secondSpinOk = targetPad.spin !== "open" ? selectedSpin === targetPad.spin : !pair.secondLockRequired;
+    if (pair.hard && (!player.chargedSpinOk || !secondSpinOk)) {
+      score = Math.max(0, score - 30);
+      misread = clamp(misread + 12, 0, MISREAD_MAX);
+      combo = 0;
+      comboMult = 1;
+      proofUsedSinceChain = true;
+      pulseText = "LOCK CHAIN BROKE";
+      pulseTimer = 0.9;
+      targetPad.rejectFlash = 0.9;
+      addPopup(targetPad.x, targetPad.y - 10, "CHAIN FAIL", "#ff725f");
+      clearPair(pair.id);
+      spawnAllPairs();
+      if (misread >= MISREAD_MAX) finishRun("Hard pairs collapsed the run.");
+      return;
+    }
+
+    const noProofNow = proofTimer <= 0.001;
+    const chainCount = noProofNow ? combo + 1 : combo;
+    const blindBonus = proofUsedSinceChain ? 0 : 50;
+    const basePoints = 100;
+    const multiplier = chainCount >= 3 ? Math.min(5, chainCount - 1) : 1;
+    const total = (basePoints + blindBonus) * multiplier;
+    score += total;
+    if (noProofNow) {
+      combo = chainCount;
+      comboMult = multiplier;
+    }
+    lastPairSuccessTime = elapsed;
+    pulseText = blindBonus ? `PAIR +${total}` : `PAIR +${total}`;
+    pulseTimer = 0.9;
+    addPopup(targetPad.x, targetPad.y - 18, `+${total}`, "#ffd36d");
+    spawnCompletionEffect(targetPad.x, targetPad.y, pair.hard ? "#ff58cb" : "#ffd36d");
+    clearPair(pair.id);
+    proofUsedSinceChain = proofTimer > 0;
+    spawnAllPairs();
+  }
+
+  function clearChargedPads() {
+    for (const pad of pads) pad.charged = false;
+    player.chargedPairId = null;
+    player.chargedPadId = null;
+    player.chargedSpinOk = false;
+  }
+
+  function clearPair(pairId) {
+    for (const pad of pads) {
+      if (pad.pairId === pairId) {
+        pad.pairId = null;
+        pad.pairIndex = -1;
+        pad.charged = false;
+        pad.isDecoy = false;
+        pad.spin = "open";
+        pad.hintFlash = 0;
+      }
+    }
+    activePairs = activePairs.filter((entry) => entry.id !== pairId);
+    activePairIds.delete(pairId);
+    if (player.chargedPairId === pairId) clearChargedPads();
+  }
+
+  function update(dt) {
+    for (const key of pressed) {
+      if (screen === "title" || screen === "gameover") {
+        if (key === "Space" || key === "Enter") resetRun();
+      }
+      if (screen === "play") {
+        if (key === "ArrowLeft" && canAct()) queuedAngle = (queuedAngle + 7) % 8;
+        if (key === "ArrowRight" && canAct()) queuedAngle = (queuedAngle + 1) % 8;
+        if (key === "KeyZ") selectedSpin = "left";
+        if (key === "KeyX") selectedSpin = "right";
+        if (key === "ShiftLeft" || key === "ShiftRight") useProofStrip();
+        if (key === "Space") dash();
+      }
+    }
+    pressed.clear();
+
+    if (screen !== "play") {
+      updateEffects(dt);
+      return;
+    }
+
+    elapsed += dt;
+    timeLeft = Math.max(0, ROUND_LENGTH - elapsed);
+    difficulty = stageFromTime();
+    sunSpeed = lerp(0.24, 0.88, difficulty);
+    if (timeLeft < 15) sunSpeed += 0.2;
+    sunAngle += dt * sunSpeed;
+    proofCooldown = Math.max(0, proofCooldown - dt);
+    stunTimer = Math.max(0, stunTimer - dt);
+    if (proofTimer > 0) {
+      proofTimer = Math.max(0, proofTimer - dt);
+      proofSweep += dt * 2.9;
+    }
+    if (pulseTimer > 0) pulseTimer = Math.max(0, pulseTimer - dt);
+    if (elapsed - lastPairSuccessTime > 6 && combo > 0) {
+      combo = 0;
+      comboMult = 1;
+    }
+
+    if (player.moving) {
+      player.anim += dt / player.dashTime;
+      const t = clamp(player.anim, 0, 1);
+      const arc = Math.sin(t * Math.PI) * 24;
+      const mx = lerp(player.fromX, player.toX, t);
+      const my = lerp(player.fromY, player.toY, t) - arc;
+      player.x = mx;
+      player.y = my;
+      if (t >= 1) {
+        player.x = player.toX;
+        player.y = player.toY;
+        if (player.rejected) {
+          player.moving = false;
+          player.rejected = false;
+          player.x = player.returnX;
+          player.y = player.returnY;
+        } else {
+          player.moving = false;
+          handleLanding(padById.get(player.targetPadId));
+        }
+      }
+    } else {
+      const current = padById.get(player.padId);
+      player.x = current.x;
+      player.y = current.y;
+    }
+
+    if (misread >= MISREAD_MAX) finishRun("Misread meter maxed.");
+    if (timeLeft <= 0) finishRun("Sixty seconds elapsed.");
+
+    updateEffects(dt);
+  }
+
+  function updateEffects(dt) {
+    for (let i = trail.length - 1; i >= 0; i -= 1) {
+      trail[i].life -= dt;
+      if (trail[i].life <= 0) trail.splice(i, 1);
+    }
+    for (let i = particles.length - 1; i >= 0; i -= 1) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.985;
+      p.vy *= 0.985;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    for (let i = popups.length - 1; i >= 0; i -= 1) {
+      const popup = popups[i];
+      popup.life -= dt;
+      popup.y -= dt * 28;
+      if (popup.life <= 0) popups.splice(i, 1);
+    }
+    for (const pad of pads) {
+      pad.acceptFlash = Math.max(0, pad.acceptFlash - dt * 1.8);
+      pad.rejectFlash = Math.max(0, pad.rejectFlash - dt * 2.1);
+      pad.spawnFlash = Math.max(0, pad.spawnFlash - dt * 0.9);
+      pad.hintFlash = Math.max(0, pad.hintFlash - dt * 1.1);
+    }
+  }
+
+  function spawnBurst(x, y, color, count, speed) {
+    for (let i = 0; i < count; i += 1) {
+      const a = rand(0, TAU);
+      const v = rand(speed * 0.45, speed);
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * v * 18,
+        vy: Math.sin(a) * v * 18,
+        life: rand(0.22, 0.6),
+        color
+      });
+    }
+  }
+
+  function spawnShock(x, y) {
+    for (let i = 0; i < 14; i += 1) {
+      const a = (i / 14) * TAU;
+      particles.push({
+        x,
+        y,
+        vx: Math.cos(a) * 110,
+        vy: Math.sin(a) * 44,
+        life: 0.28,
+        color: "#ff725f"
+      });
+    }
+  }
+
+  function spawnCompletionEffect(x, y, color) {
+    for (let i = 0; i < 3; i += 1) {
+      for (let j = 0; j < 20; j += 1) {
+        const a = (j / 20) * TAU + i * 0.18;
+        particles.push({
+          x: x + Math.cos(a) * (i * 5),
+          y: y + Math.sin(a) * (i * 5),
+          vx: Math.cos(a) * (70 + i * 22),
+          vy: Math.sin(a) * (70 + i * 22),
+          life: 0.48 + i * 0.08,
+          color
+        });
+      }
+    }
+  }
+
+  function addPopup(x, y, text, color) {
+    popups.push({ x, y, text, color, life: 1.1 });
+  }
+
+  function drawPad(pad) {
+    const pal = shadePalette[pad.trueShade];
+    const apparentShift = proofTimer > 0 ? 0 : pad.apparentOffset;
+    const shadeIndex = clamp(pad.trueShade + apparentShift, 0, shadePalette.length - 1);
+    const apparent = shadePalette[shadeIndex];
+    const fill = proofTimer > 0 ? pal.base : apparent.base;
+    const lit = proofTimer > 0 ? pal.lit : apparent.lit;
+    const shadow = proofTimer > 0 ? pal.shadow : apparent.shadow;
+
+    ctx.beginPath();
+    ctx.moveTo(pad.corners[0].x, pad.corners[0].y);
+    for (let i = 1; i < pad.corners.length; i += 1) ctx.lineTo(pad.corners[i].x, pad.corners[i].y);
+    ctx.closePath();
+
+    const grad = ctx.createLinearGradient(pad.corners[0].x, pad.corners[0].y, pad.corners[2].x, pad.corners[2].y);
+    grad.addColorStop(0, lit);
+    grad.addColorStop(0.48, fill);
+    grad.addColorStop(1, shadow);
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    ctx.save();
+    ctx.clip();
+    ctx.fillStyle = "rgba(0,0,0,0.35)";
+    const bandShift = proofTimer > 0 ? 0 : pad.shadowBias * 26;
+    ctx.beginPath();
+    ctx.moveTo(pad.corners[0].x - 20 + bandShift, pad.corners[0].y - 8);
+    ctx.lineTo(pad.corners[1].x + 24 + bandShift, pad.corners[1].y - 10);
+    ctx.lineTo(pad.corners[2].x - 24 + bandShift, pad.corners[2].y + 24);
+    ctx.lineTo(pad.corners[3].x - 58 + bandShift, pad.corners[3].y + 22);
+    ctx.closePath();
+    ctx.fill();
+
+    if (pad.charged) {
+      ctx.strokeStyle = `rgba(255, 211, 109, ${0.55 + Math.sin(elapsed * 8) * 0.18})`;
+      ctx.lineWidth = 4;
+      ctx.strokeRect(pad.x - 30, pad.y - 24, 60, 48);
+    }
+    if (pad.acceptFlash > 0) {
+      ctx.strokeStyle = `rgba(105, 244, 255, ${pad.acceptFlash})`;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.arc(pad.x, pad.y, 12 + (1 - pad.acceptFlash) * 36, 0, TAU);
+      ctx.stroke();
+    }
+    if (pad.rejectFlash > 0) {
+      ctx.strokeStyle = `rgba(255, 114, 95, ${pad.rejectFlash})`;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(pad.x - 30, pad.y - 4);
+      ctx.lineTo(pad.x + 30, pad.y - 4);
+      ctx.moveTo(pad.x - 30, pad.y + 4);
+      ctx.lineTo(pad.x + 30, pad.y + 4);
+      ctx.stroke();
+    }
+    if (pad.spawnFlash > 0) {
+      ctx.fillStyle = `rgba(255, 211, 109, ${pad.spawnFlash * 0.16})`;
+      ctx.fillRect(pad.x - 34, pad.y - 28, 68, 56);
+    }
+    if (pad.hintFlash > 0) {
+      ctx.strokeStyle = `rgba(255, 88, 203, ${pad.hintFlash * 0.7})`;
+      ctx.lineWidth = 3;
+      ctx.strokeRect(pad.x - 24, pad.y - 18, 48, 36);
+    }
+    ctx.restore();
+
+    ctx.strokeStyle = "rgba(10, 10, 10, 0.7)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    if (pad.spin !== "open") drawSpinGlyph(pad.x, pad.y, pad.spin, 0.5);
+  }
+
+  function drawSpinGlyph(x, y, spin, alpha = 1) {
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.strokeStyle = spin === "left"
+      ? `rgba(105, 244, 255, ${alpha})`
+      : `rgba(255, 88, 203, ${alpha})`;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.arc(0, 0, 12, spin === "left" ? 0.3 : -2.85, spin === "left" ? 4.9 : 1.74, spin === "left");
+    ctx.stroke();
+    const ang = spin === "left" ? 4.85 : 1.75;
+    ctx.beginPath();
+    ctx.moveTo(Math.cos(ang) * 12, Math.sin(ang) * 12);
+    ctx.lineTo(Math.cos(ang) * 16 - (spin === "left" ? 4 : -4), Math.sin(ang) * 16 - 4);
+    ctx.lineTo(Math.cos(ang) * 16 - (spin === "left" ? 1 : -1), Math.sin(ang) * 16 + 4);
+    ctx.closePath();
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBoard() {
+    ctx.save();
+    ctx.fillStyle = "rgba(0,0,0,0.26)";
+    ctx.beginPath();
+    ctx.ellipse(CX, CY + 180, 410, 88, 0, 0, TAU);
+    ctx.fill();
+    ctx.restore();
+
+    for (const pad of pads) drawPad(pad);
+  }
+
+  function drawSunAndAim() {
+    const sun = sunPosition();
+    ctx.save();
+    ctx.strokeStyle = "rgba(243, 169, 60, 0.24)";
+    ctx.lineWidth = 2;
+    ctx.setLineDash([8, 10]);
+    ctx.beginPath();
+    ctx.ellipse(CX, CY, SUN_RADIUS_X, SUN_RADIUS_Y, 0, 0, TAU);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    const aim = queuedWorldAngle();
+    ctx.strokeStyle = "rgba(255, 211, 109, 0.5)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(player.x, player.y);
+    ctx.lineTo(player.x + Math.cos(aim) * 120, player.y + Math.sin(aim) * 120);
+    ctx.stroke();
+
+    ctx.fillStyle = "#f3a93c";
+    ctx.beginPath();
+    ctx.arc(sun.x, sun.y, 22, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(255, 211, 109, 0.75)";
+    ctx.lineWidth = 4;
+    for (let i = 0; i < 12; i += 1) {
+      const a = (i / 12) * TAU + elapsed * 0.5;
+      ctx.beginPath();
+      ctx.moveTo(sun.x + Math.cos(a) * 30, sun.y + Math.sin(a) * 30);
+      ctx.lineTo(sun.x + Math.cos(a) * 44, sun.y + Math.sin(a) * 44);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawTrail() {
+    for (const t of trail) {
+      const alpha = clamp(t.life / 0.28, 0, 1);
+      ctx.strokeStyle = t.spin === "left"
+        ? `rgba(105, 244, 255, ${alpha * 0.6})`
+        : `rgba(255, 88, 203, ${alpha * 0.6})`;
+      ctx.lineWidth = 7;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(t.x1, t.y1);
+      ctx.quadraticCurveTo((t.x1 + t.x2) * 0.5 + t.curve, (t.y1 + t.y2) * 0.5 - Math.abs(t.curve) * 0.22, t.x2, t.y2);
+      ctx.stroke();
+    }
+  }
+
+  function drawPlayer() {
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    const pulse = Math.sin(elapsed * 8) * 0.08;
+    ctx.fillStyle = "#f7efd9";
+    ctx.beginPath();
+    ctx.arc(0, 0, 18 + pulse, 0, TAU);
+    ctx.fill();
+    ctx.strokeStyle = selectedSpin === "left" ? "#69f4ff" : "#ff58cb";
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.arc(0, 0, 24 + pulse * 8, -1.4, 1.9);
+    ctx.stroke();
+    drawSpinGlyph(0, 0, selectedSpin, 0.95);
+    ctx.restore();
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.fillStyle = p.color.replace(")", `, ${Math.min(1, p.life * 1.9)})`).replace("rgb", "rgba");
+      if (!p.color.startsWith("rgb")) ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.min(1, p.life * 2);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 3, 0, TAU);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawPopups() {
+    ctx.font = "700 22px Trebuchet MS";
+    ctx.textAlign = "center";
+    for (const popup of popups) {
+      ctx.globalAlpha = clamp(popup.life, 0, 1);
+      ctx.fillStyle = popup.color;
+      ctx.fillText(popup.text, popup.x, popup.y);
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function drawProofStrip() {
+    if (proofTimer <= 0) return;
+    const t = clamp(proofSweep, 0, 1.45);
+    const x = lerp(120, W - 120, clamp(t, 0, 1));
+    const width = 210;
+    const grad = ctx.createLinearGradient(x - width, 0, x + width, 0);
+    grad.addColorStop(0, "rgba(255,255,255,0)");
+    grad.addColorStop(0.45, "rgba(255,250,214,0.04)");
+    grad.addColorStop(0.5, "rgba(255,250,214,0.26)");
+    grad.addColorStop(0.55, "rgba(255,250,214,0.04)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 80, W, H - 160);
+    ctx.strokeStyle = "rgba(255, 243, 184, 0.55)";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x - 38, 100, 76, H - 200);
+  }
+
+  function drawHud() {
+    ctx.save();
+    ctx.fillStyle = "rgba(11, 10, 9, 0.76)";
+    ctx.roundRect(28, 24, 370, 136, 20);
+    ctx.roundRect(W - 366, 24, 338, 170, 20);
+    ctx.fill();
+
+    ctx.fillStyle = "#f7efd9";
+    ctx.font = "700 20px Trebuchet MS";
+    ctx.textAlign = "left";
+    ctx.fillText("SHADE SIGNAL PANIC", 48, 56);
+    ctx.font = "600 15px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.76)";
+    ctx.fillText("Match the same true shade, not the same look.", 48, 82);
+    ctx.fillText(`Sun-relative dash: ${formatAngle(queuedAngle)}   Spin: ${selectedSpin.toUpperCase()}`, 48, 106);
+    ctx.fillText(`Proof strip: ${proofTimer > 0 ? "ACTIVE" : proofCooldown > 0 ? `${proofCooldown.toFixed(1)}s` : "READY"}`, 48, 130);
+
+    ctx.textAlign = "right";
+    ctx.font = "700 26px Trebuchet MS";
+    ctx.fillStyle = "#ffd36d";
+    ctx.fillText(String(score).padStart(5, "0"), W - 48, 60);
+    ctx.font = "600 15px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.76)";
+    ctx.fillText(`Best ${String(best).padStart(5, "0")}`, W - 48, 84);
+    ctx.fillText(`Time ${timeLeft.toFixed(1)}s`, W - 48, 108);
+    ctx.fillText(`Combo x${comboMult}   Chain ${combo}`, W - 48, 132);
+
+    const meterX = W - 334;
+    const meterY = 148;
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.82)";
+    ctx.fillText("MISREAD", meterX, meterY - 10);
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.fillRect(meterX, meterY, 286, 16);
+    ctx.fillStyle = misread < 60 ? "#ffd36d" : misread < 85 ? "#ff9a4f" : "#ff725f";
+    ctx.fillRect(meterX, meterY, 286 * (misread / MISREAD_MAX), 16);
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.strokeRect(meterX, meterY, 286, 16);
+
+    if (pulseTimer > 0) {
+      ctx.font = "700 26px Trebuchet MS";
+      ctx.textAlign = "center";
+      ctx.fillStyle = `rgba(255, 211, 109, ${pulseTimer})`;
+      ctx.fillText(pulseText, CX, 58);
+    }
+    ctx.restore();
+  }
+
+  function drawLegend() {
+    ctx.save();
+    ctx.fillStyle = "rgba(11, 10, 9, 0.74)";
+    ctx.roundRect(32, H - 130, 412, 84, 18);
+    ctx.fill();
+    ctx.font = "600 14px Trebuchet MS";
+    ctx.textAlign = "left";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.78)";
+    ctx.fillText("Target logic", 52, H - 96);
+    ctx.fillStyle = "#ffd36d";
+    ctx.fillText("Gold pulse", 52, H - 70);
+    ctx.fillStyle = "rgba(247, 239, 217, 0.82)";
+    ctx.fillText("charged pair pad", 128, H - 70);
+    ctx.fillStyle = "#69f4ff";
+    ctx.fillText("Cyan curl", 248, H - 70);
+    ctx.fillStyle = "rgba(247, 239, 217, 0.82)";
+    ctx.fillText("LEFT lock", 312, H - 70);
+    ctx.fillStyle = "#ff58cb";
+    ctx.fillText("Magenta curl", 52, H - 50);
+    ctx.fillStyle = "rgba(247, 239, 217, 0.82)";
+    ctx.fillText("RIGHT lock", 152, H - 50);
+    ctx.fillStyle = "#ff725f";
+    ctx.fillText("Flat shock", 252, H - 50);
+    ctx.fillStyle = "rgba(247, 239, 217, 0.82)";
+    ctx.fillText("rejection or decoy", 322, H - 50);
+    ctx.restore();
+  }
+
+  function drawTitle() {
+    drawBoard();
+    drawSunAndAim();
+    drawTrail();
+    drawPlayer();
+    drawParticles();
+    ctx.fillStyle = "rgba(5,5,5,0.56)";
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.fillStyle = "rgba(18, 15, 12, 0.92)";
+    ctx.roundRect(178, 126, W - 356, H - 252, 30);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(247, 239, 217, 0.12)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f7efd9";
+    ctx.font = "700 54px Georgia";
+    ctx.fillText("Shade Signal Panic", CX, 214);
+    ctx.font = "600 24px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.84)";
+    ctx.fillText("Dash by the sun. Score by the hidden shade. Survive by the secret spin.", CX, 254);
+
+    ctx.textAlign = "left";
+    ctx.font = "700 20px Trebuchet MS";
+    ctx.fillStyle = "#ffd36d";
+    ctx.fillText("How to play", 242, 330);
+    ctx.font = "600 18px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.88)";
+    ctx.fillText("Left / Right: rotate the queued dash in 45 degree steps relative to the moving sun.", 242, 370);
+    ctx.fillText("Space: commit the dash. Z / X: choose LEFT-SPIN or RIGHT-SPIN before landing.", 242, 404);
+    ctx.fillText("Shift: fire the PROOF STRIP for half a second to flatten shadows and reveal true shade.", 242, 438);
+    ctx.fillText("Land on one hidden pair pad, then its same-shade partner, even if they look different.", 242, 472);
+    ctx.fillText("Wrong spin, wrong decoy, or off-board dashes fill the MISREAD meter and can end the run early.", 242, 506);
+
+    ctx.font = "700 20px Trebuchet MS";
+    ctx.fillStyle = "#69f4ff";
+    ctx.fillText("Scoring", 242, 576);
+    ctx.font = "600 18px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.88)";
+    ctx.fillText("+100 pair, +50 blind confidence if no proof strip, +25 lock-channel bonus.", 242, 616);
+    ctx.fillText("Three clean pairs start combo multipliers. Hard pairs late-game demand two spin-matched landings.", 242, 650);
+
+    ctx.font = "700 26px Trebuchet MS";
+    ctx.fillStyle = "#ff58cb";
+    ctx.fillText("PRESS SPACE OR ENTER", CX, H - 134);
+    ctx.font = "600 18px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.76)";
+    ctx.fillText(`Best score ${String(best).padStart(5, "0")}`, CX, H - 100);
+  }
+
+  function drawGameOver() {
+    drawBoard();
+    drawSunAndAim();
+    drawTrail();
+    drawPlayer();
+    drawParticles();
+    drawPopups();
+    ctx.fillStyle = "rgba(0,0,0,0.58)";
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = "rgba(16, 12, 10, 0.92)";
+    ctx.roundRect(270, 180, W - 540, H - 360, 28);
+    ctx.fill();
+    ctx.strokeStyle = "rgba(247, 239, 217, 0.12)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f7efd9";
+    ctx.font = "700 52px Georgia";
+    ctx.fillText("Run Over", CX, 286);
+    ctx.font = "600 24px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.8)";
+    ctx.fillText(endReason, CX, 326);
+
+    ctx.font = "700 68px Trebuchet MS";
+    ctx.fillStyle = "#ffd36d";
+    ctx.fillText(String(score).padStart(5, "0"), CX, 424);
+    ctx.font = "600 22px Trebuchet MS";
+    ctx.fillStyle = "rgba(247, 239, 217, 0.84)";
+    ctx.fillText(`Best ${String(best).padStart(5, "0")}   Misread ${Math.round(misread)} / 100`, CX, 466);
+
+    ctx.font = "600 20px Trebuchet MS";
+    ctx.fillText("Blind pairs and lock-matched hard chains drive the score. Hesitation gets punished late.", CX, 536);
+    ctx.fillStyle = "#69f4ff";
+    ctx.fillText("Press Space or Enter to restart", CX, 602);
+  }
+
+  function drawBackground() {
+    const grad = ctx.createRadialGradient(CX, CY - 40, 120, CX, CY, 720);
+    grad.addColorStop(0, "rgba(255, 223, 128, 0.05)");
+    grad.addColorStop(0.4, "rgba(30, 23, 17, 0.04)");
+    grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = "rgba(255,255,255,0.03)";
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 14; i += 1) {
+      ctx.beginPath();
+      ctx.moveTo(0, 74 + i * 58);
+      ctx.lineTo(W, 74 + i * 58);
+      ctx.stroke();
+    }
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    drawBackground();
+
+    if (screen === "title") {
+      drawTitle();
+      return;
+    }
+
+    drawBoard();
+    drawSunAndAim();
+    drawTrail();
+    drawParticles();
+    drawPlayer();
+    drawProofStrip();
+    drawPopups();
+    if (screen === "play") {
+      drawHud();
+      drawLegend();
+    } else if (screen === "gameover") {
+      drawGameOver();
+    }
+  }
+
+  function frame(ts) {
+    const dt = Math.min(0.033, (ts - lastTime) / 1000 || 0.016);
+    lastTime = ts;
+    update(dt);
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", (event) => {
+    const code = event.code;
+    if (["ArrowLeft", "ArrowRight", "Space", "Enter", "KeyZ", "KeyX", "ShiftLeft", "ShiftRight"].includes(code)) {
+      event.preventDefault();
+    }
+    if (!keys.has(code)) pressed.add(code);
+    keys.add(code);
+  });
+
+  window.addEventListener("keyup", (event) => {
+    keys.delete(event.code);
+  });
+
+  createBoard();
+  player.padId = pads[Math.floor(pads.length / 2)].id;
+  player.x = padById.get(player.padId).x;
+  player.y = padById.get(player.padId).y;
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
