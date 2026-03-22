@@ -1,0 +1,1120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Loogie Loop</title>
+<style>
+  :root {
+    --bg0: #10201f;
+    --bg1: #d4d9d0;
+    --ink: #f8fff8;
+    --muted: rgba(248, 255, 248, 0.72);
+    --panel: rgba(8, 22, 19, 0.82);
+    --line: rgba(255, 255, 255, 0.14);
+    --mint: #9dffd4;
+    --teal: #41d8c2;
+    --pearl: #eefef6;
+    --warn: #ff7f69;
+    --gold: #ffd983;
+    --sign: #315a4c;
+    --tile: #d8ddd2;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    min-height: 100%;
+    background:
+      radial-gradient(circle at top, rgba(157, 255, 212, 0.16), transparent 28%),
+      radial-gradient(circle at 18% 10%, rgba(65, 216, 194, 0.1), transparent 18%),
+      linear-gradient(180deg, #0f1918 0%, #152322 100%);
+    color: var(--ink);
+    font-family: Georgia, "Times New Roman", serif;
+  }
+
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 18px;
+  }
+
+  .shell {
+    width: min(1320px, 100%);
+    position: relative;
+  }
+
+  .back-link {
+    position: absolute;
+    top: 0;
+    left: 0;
+    z-index: 3;
+    color: var(--ink);
+    text-decoration: none;
+    padding: 10px 14px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    background: rgba(7, 17, 15, 0.8);
+    backdrop-filter: blur(8px);
+    font-size: 14px;
+    letter-spacing: 0.04em;
+  }
+
+  .back-link:hover,
+  .back-link:focus-visible {
+    outline: none;
+    border-color: rgba(255, 217, 131, 0.8);
+    color: var(--gold);
+  }
+
+  .frame { padding-top: 54px; }
+
+  canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 28px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow:
+      0 28px 90px rgba(0, 0, 0, 0.44),
+      inset 0 0 120px rgba(238, 254, 246, 0.05);
+    background:
+      radial-gradient(circle at 50% 38%, rgba(255, 255, 255, 0.06), transparent 24%),
+      linear-gradient(180deg, rgba(224, 231, 223, 0.96), rgba(189, 200, 191, 1));
+  }
+
+  .note {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    letter-spacing: 0.02em;
+  }
+
+  @media (max-width: 760px) {
+    body { padding: 10px; }
+    .frame { padding-top: 58px; }
+    .back-link { font-size: 13px; padding: 9px 12px; }
+    .note { font-size: 12px; line-height: 1.45; }
+  }
+</style>
+</head>
+<body>
+  <div class="shell">
+    <a class="back-link" href="index.html">← Back to Arcade</a>
+    <div class="frame">
+      <canvas id="game" width="1280" height="840" aria-label="Loogie Loop"></canvas>
+      <div class="note">Move with WASD or arrows. Space spits. Shift scrapes slime. Z swaps KRILL and DAYLIGHT. X triggers a migration pulse.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const ctx = canvas.getContext("2d");
+
+  const W = canvas.width;
+  const H = canvas.height;
+  const arena = { x: 86, y: 86, w: W - 172, h: H - 152 };
+  const keys = new Set();
+  const pressed = new Set();
+
+  const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+  const lerp = (a, b, t) => a + (b - a) * t;
+  const dist = (ax, ay, bx, by) => Math.hypot(ax - bx, ay - by);
+  const rand = (min, max) => min + Math.random() * (max - min);
+
+  let screen = "title";
+  let worldTime = 0;
+  let score = 0;
+  let best = 0;
+  let timeLeft = 60;
+  let citation = 0;
+  let attractant = "KRILL";
+  let pulseTimer = 0;
+  let pulseCooldown = 0;
+  let graphDirty = true;
+  let graphVersion = 0;
+  let spawnTimer = 0;
+  let message = "";
+  let messageTimer = 0;
+  let finalReason = "";
+  let shake = 0;
+  let comboTimer = 0;
+  let comboCount = 0;
+
+  const cursor = {
+    x: arena.x + arena.w * 0.5,
+    y: arena.y + arena.h * 0.5,
+    r: 15,
+    speed: 460
+  };
+
+  const particles = [];
+  const popups = [];
+  const droplets = [];
+  const flocks = [];
+  const veins = [];
+  const legalTrays = [];
+  let graph = null;
+
+  const fixedNodes = [];
+  const obstacles = [
+    { x: arena.x + 268, y: arena.y + 196, w: 150, h: 54, type: "bench" },
+    { x: arena.x + arena.w - 418, y: arena.y + 196, w: 150, h: 54, type: "bench" },
+    { x: arena.x + 220, y: arena.y + 370, w: 96, h: 160, type: "stairs" },
+    { x: arena.x + arena.w - 316, y: arena.y + 334, w: 104, h: 194, type: "stairs" },
+    { x: arena.x + 486, y: arena.y + 320, w: 122, h: 58, type: "bench" },
+    { x: arena.x + 486, y: arena.y + 438, w: 122, h: 58, type: "bench" }
+  ];
+
+  function initFixedNodes() {
+    fixedNodes.length = 0;
+    const cx = arena.x + arena.w * 0.5;
+    const left = arena.x + 94;
+    const right = arena.x + arena.w - 94;
+    const top = arena.y + 34;
+    const bottom = arena.y + arena.h - 34;
+    fixedNodes.push({ id: "topPole", kind: "pole", side: "top", x: cx, y: top });
+    fixedNodes.push({ id: "botPole", kind: "pole", side: "bottom", x: cx, y: bottom });
+    fixedNodes.push({ id: "topLeft", kind: "lane", lane: "left", x: left, y: arena.y + 112 });
+    fixedNodes.push({ id: "topRight", kind: "lane", lane: "right", x: right, y: arena.y + 112 });
+    fixedNodes.push({ id: "midLeft", kind: "lane", lane: "left", x: left, y: arena.y + arena.h * 0.5 });
+    fixedNodes.push({ id: "midRight", kind: "lane", lane: "right", x: right, y: arena.y + arena.h * 0.5 });
+    fixedNodes.push({ id: "botLeft", kind: "lane", lane: "left", x: left, y: arena.y + arena.h - 112 });
+    fixedNodes.push({ id: "botRight", kind: "lane", lane: "right", x: right, y: arena.y + arena.h - 112 });
+    fixedNodes.push({ id: "midA", kind: "hub", x: cx - 154, y: arena.y + arena.h * 0.44 });
+    fixedNodes.push({ id: "midB", kind: "hub", x: cx + 154, y: arena.y + arena.h * 0.56 });
+    fixedNodes.push({ id: "northA", kind: "hub", x: cx - 102, y: arena.y + 206 });
+    fixedNodes.push({ id: "northB", kind: "hub", x: cx + 102, y: arena.y + 206 });
+    fixedNodes.push({ id: "southA", kind: "hub", x: cx - 102, y: arena.y + arena.h - 206 });
+    fixedNodes.push({ id: "southB", kind: "hub", x: cx + 102, y: arena.y + arena.h - 206 });
+  }
+
+  function resetRun() {
+    score = 0;
+    timeLeft = 60;
+    citation = 0;
+    attractant = "KRILL";
+    pulseTimer = 0;
+    pulseCooldown = 0;
+    graphDirty = true;
+    graphVersion = 1;
+    spawnTimer = 0.7;
+    message = "";
+    messageTimer = 0;
+    finalReason = "";
+    comboTimer = 0;
+    comboCount = 0;
+    droplets.length = 0;
+    flocks.length = 0;
+    particles.length = 0;
+    popups.length = 0;
+    veins.length = 0;
+    cursor.x = arena.x + arena.w * 0.5;
+    cursor.y = arena.y + arena.h * 0.5;
+    legalTrays.length = 0;
+    legalTrays.push(
+      { x: arena.x + 150, y: arena.y + 152, w: 130, h: 26, vx: 74, phase: 0.2 },
+      { x: arena.x + arena.w - 280, y: arena.y + 302, w: 120, h: 26, vx: -88, phase: 1.1 },
+      { x: arena.x + 210, y: arena.y + arena.h - 182, w: 146, h: 26, vx: 96, phase: 2.4 }
+    );
+    spawnFlock("top");
+    spawnFlock("bottom");
+    rebuildGraph();
+  }
+
+  function difficulty() {
+    return clamp((60 - timeLeft) / 60, 0, 1);
+  }
+
+  function finalRush() {
+    return timeLeft <= 15 ? 1 : 0;
+  }
+
+  function addPopup(text, x, y, color = "#ffd983", life = 1.1) {
+    popups.push({ text, x, y, color, life, maxLife: life });
+  }
+
+  function addMessage(text, life = 1.2) {
+    message = text;
+    messageTimer = life;
+  }
+
+  function addParticles(x, y, color, count = 10, speed = 100) {
+    for (let i = 0; i < count; i++) {
+      const angle = rand(-Math.PI, Math.PI);
+      const mag = rand(speed * 0.25, speed);
+      particles.push({
+        x, y,
+        vx: Math.cos(angle) * mag,
+        vy: Math.sin(angle) * mag,
+        life: rand(0.4, 1.1),
+        maxLife: 1.1,
+        color,
+        size: rand(1.6, 4.8)
+      });
+    }
+  }
+
+  function pointInRect(x, y, r) {
+    return x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h;
+  }
+
+  function pointBlocked(x, y, pad = 10) {
+    if (x < arena.x + pad || x > arena.x + arena.w - pad || y < arena.y + pad || y > arena.y + arena.h - pad) return true;
+    return obstacles.some(o => x > o.x - pad && x < o.x + o.w + pad && y > o.y - pad && y < o.y + o.h + pad);
+  }
+
+  function ccw(ax, ay, bx, by, cx, cy) {
+    return (cy - ay) * (bx - ax) > (by - ay) * (cx - ax);
+  }
+
+  function segmentHitsRect(ax, ay, bx, by, r, pad = 10) {
+    const rect = { x: r.x - pad, y: r.y - pad, w: r.w + pad * 2, h: r.h + pad * 2 };
+    if (pointInRect(ax, ay, rect) || pointInRect(bx, by, rect)) return true;
+    const edges = [
+      [rect.x, rect.y, rect.x + rect.w, rect.y],
+      [rect.x + rect.w, rect.y, rect.x + rect.w, rect.y + rect.h],
+      [rect.x + rect.w, rect.y + rect.h, rect.x, rect.y + rect.h],
+      [rect.x, rect.y + rect.h, rect.x, rect.y]
+    ];
+    for (const [x1, y1, x2, y2] of edges) {
+      if (ccw(ax, ay, x1, y1, x2, y2) !== ccw(bx, by, x1, y1, x2, y2) &&
+          ccw(ax, ay, bx, by, x1, y1) !== ccw(ax, ay, bx, by, x2, y2)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function clearPath(ax, ay, bx, by) {
+    return !obstacles.some(o => segmentHitsRect(ax, ay, bx, by, o, o.type === "stairs" ? 22 : 12));
+  }
+
+  function laneBias(node) {
+    if (!node) return 0;
+    const edgeProximity = Math.min(node.x - arena.x, arena.x + arena.w - node.x) / arena.w;
+    if (attractant === "DAYLIGHT") return (0.24 - edgeProximity) * 260;
+    const centerProximity = Math.abs(node.x - (arena.x + arena.w * 0.5)) / arena.w;
+    return centerProximity * 120;
+  }
+
+  function nodeFoodBias(node) {
+    if (attractant === "KRILL") {
+      if (node.kind === "droplet") return -60;
+      if (node.kind === "tray") return -34;
+      return 0;
+    }
+    if (node.kind === "lane") return -42;
+    return 0;
+  }
+
+  function rebuildGraph() {
+    const nodes = [];
+    for (const n of fixedNodes) nodes.push({ ...n });
+    for (let i = 0; i < legalTrays.length; i++) {
+      const tray = legalTrays[i];
+      nodes.push({ id: "tray" + i, kind: "tray", x: tray.x + tray.w * 0.5, y: tray.y + tray.h * 0.5, legal: true });
+    }
+    for (const d of droplets) {
+      nodes.push({ id: "drop" + d.id, kind: "droplet", x: d.x, y: d.y, legal: d.legal, age: d.age });
+    }
+    const edges = new Map();
+    for (let i = 0; i < nodes.length; i++) edges.set(i, []);
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const a = nodes[i];
+        const b = nodes[j];
+        const d = dist(a.x, a.y, b.x, b.y);
+        if (d > 246) continue;
+        if (!clearPath(a.x, a.y, b.x, b.y)) continue;
+        let cost = d;
+        cost += laneBias(a) + laneBias(b);
+        cost += nodeFoodBias(a) + nodeFoodBias(b);
+        if (a.kind === "droplet" && b.kind === "droplet") cost -= 18;
+        if (a.kind === "lane" && b.kind === "lane" && attractant === "DAYLIGHT") cost -= 28;
+        if ((a.kind === "pole" || b.kind === "pole") && attractant === "KRILL") cost += 12;
+        edges.get(i).push({ to: j, cost });
+        edges.get(j).push({ to: i, cost });
+      }
+    }
+    graph = { nodes, edges };
+    veins.length = 0;
+    for (let i = 0; i < nodes.length; i++) {
+      for (const edge of edges.get(i)) {
+        if (edge.to > i) {
+          veins.push({
+            ax: nodes[i].x,
+            ay: nodes[i].y,
+            bx: nodes[edge.to].x,
+            by: nodes[edge.to].y,
+            glow: clamp(1.25 - edge.cost / 220, 0.15, 1)
+          });
+        }
+      }
+    }
+    graphDirty = false;
+    graphVersion++;
+    for (const flock of flocks) flock.needsRepath = true;
+  }
+
+  function findNodeIndex(id) {
+    return graph.nodes.findIndex(n => n.id === id);
+  }
+
+  function dijkstra(startIndex, goalIndex, sideHint = null) {
+    const n = graph.nodes.length;
+    const distArr = Array(n).fill(Infinity);
+    const prev = Array(n).fill(-1);
+    const visited = Array(n).fill(false);
+    distArr[startIndex] = 0;
+    for (let step = 0; step < n; step++) {
+      let bestIndex = -1;
+      let bestScore = Infinity;
+      for (let i = 0; i < n; i++) {
+        if (!visited[i] && distArr[i] < bestScore) {
+          bestScore = distArr[i];
+          bestIndex = i;
+        }
+      }
+      if (bestIndex === -1 || bestIndex === goalIndex) break;
+      visited[bestIndex] = true;
+      for (const edge of graph.edges.get(bestIndex)) {
+        const node = graph.nodes[edge.to];
+        let extra = 0;
+        if (sideHint && node.kind === "lane") {
+          extra += node.lane === sideHint ? -60 : 26;
+        }
+        const candidate = distArr[bestIndex] + edge.cost + extra;
+        if (candidate < distArr[edge.to]) {
+          distArr[edge.to] = candidate;
+          prev[edge.to] = bestIndex;
+        }
+      }
+    }
+    if (!Number.isFinite(distArr[goalIndex])) return null;
+    const path = [];
+    let cursorIndex = goalIndex;
+    while (cursorIndex !== -1) {
+      path.push(cursorIndex);
+      cursorIndex = prev[cursorIndex];
+    }
+    path.reverse();
+    return path;
+  }
+
+  function pathSide(path) {
+    let left = 0;
+    let right = 0;
+    for (const index of path) {
+      const node = graph.nodes[index];
+      if (node.lane === "left" || node.x < arena.x + arena.w * 0.38) left++;
+      if (node.lane === "right" || node.x > arena.x + arena.w * 0.62) right++;
+    }
+    return left >= right ? "left" : "right";
+  }
+
+  function assignPath(flock, immediate) {
+    if (!graph || graphDirty) rebuildGraph();
+    const startId = flock.leg === 0 ? (flock.origin === "top" ? "topPole" : "botPole") : (flock.origin === "top" ? "botPole" : "topPole");
+    const goalId = flock.leg === 0 ? (flock.origin === "top" ? "botPole" : "topPole") : (flock.origin === "top" ? "topPole" : "botPole");
+    const startIndex = findNodeIndex(startId);
+    const goalIndex = findNodeIndex(goalId);
+    const prefer = attractant === "DAYLIGHT" ? (flock.leg === 0 ? null : (flock.outboundSide === "left" ? "right" : "left")) : null;
+    const path = dijkstra(startIndex, goalIndex, prefer);
+    flock.route = [];
+    flock.routeIndex = 0;
+    flock.routeSide = null;
+    flock.lastGraphVersion = graphVersion;
+    flock.needsRepath = false;
+    if (!path) return false;
+    flock.routeSide = pathSide(path);
+    flock.route = path.map(index => ({ x: graph.nodes[index].x, y: graph.nodes[index].y, id: graph.nodes[index].id }));
+    if (immediate) {
+      flock.x = flock.route[0].x;
+      flock.y = flock.route[0].y;
+    } else {
+      flock.routeIndex = Math.min(flock.route.findIndex(p => dist(flock.x, flock.y, p.x, p.y) < 48), flock.route.length - 1);
+      if (flock.routeIndex < 0) flock.routeIndex = 0;
+    }
+    return true;
+  }
+
+  function spawnFlock(origin) {
+    const flock = {
+      x: arena.x + arena.w * 0.5 + rand(-36, 36),
+      y: origin === "top" ? arena.y + 34 : arena.y + arena.h - 34,
+      vx: 0,
+      vy: 0,
+      speed: 126 + difficulty() * 48 + rand(-10, 12),
+      wing: rand(0, Math.PI * 2),
+      origin,
+      leg: 0,
+      outboundSide: null,
+      routeSide: null,
+      route: [],
+      routeIndex: 0,
+      stalled: 0,
+      naturalEligible: true,
+      needsRepath: true,
+      lastGraphVersion: 0,
+      repathFlash: 0
+    };
+    flocks.push(flock);
+    assignPath(flock, true);
+  }
+
+  function scorePoints(amount, x, y, color = "#ffd983", text = null) {
+    score += amount;
+    addPopup(text || (amount > 0 ? "+" + amount : String(amount)), x, y, color);
+  }
+
+  function pulseMigration() {
+    if (pulseCooldown > 0) return;
+    pulseTimer = 1;
+    pulseCooldown = 3.5;
+    comboCount = 0;
+    comboTimer = 1.25;
+    for (const flock of flocks) {
+      flock.needsRepath = true;
+      flock.naturalEligible = false;
+      flock.repathFlash = 1;
+    }
+    addMessage("Migration pulse");
+    addParticles(cursor.x, cursor.y, "#eefef6", 26, 180);
+  }
+
+  function trySpit() {
+    const x = Math.round(cursor.x / 18) * 18;
+    const y = Math.round(cursor.y / 18) * 18;
+    if (pointBlocked(x, y, 16)) {
+      addMessage("No clear tile");
+      return;
+    }
+    const nearest = droplets.find(d => dist(x, y, d.x, d.y) < 14);
+    if (nearest) {
+      addMessage("Tile already fed");
+      return;
+    }
+    const legal = legalTrays.some(t => x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + t.h);
+    droplets.push({ id: Date.now() + Math.random(), x, y, legal, age: 0 });
+    addParticles(x, y, legal ? "#9dffd4" : "#41d8c2", 14, 120);
+    if (!legal) {
+      const rise = 10 + finalRush() * 6;
+      citation = clamp(citation + rise, 0, 100);
+      scorePoints(-10, x, y - 16, "#ff7f69");
+      addMessage("Public-tile violation");
+    } else {
+      addPopup("LEGAL", x, y - 16, "#9dffd4");
+    }
+    graphDirty = true;
+  }
+
+  function scrapeNearest() {
+    if (!droplets.length) {
+      addMessage("Nothing to scrape");
+      return;
+    }
+    let bestIndex = -1;
+    let bestDist = 42;
+    for (let i = 0; i < droplets.length; i++) {
+      const d = dist(cursor.x, cursor.y, droplets[i].x, droplets[i].y);
+      if (d < bestDist) {
+        bestDist = d;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex === -1) {
+      addMessage("Move closer to slime");
+      return;
+    }
+    const removed = droplets.splice(bestIndex, 1)[0];
+    addParticles(removed.x, removed.y, "#eefef6", 12, 150);
+    addPopup("SCRAPE", removed.x, removed.y - 18, "#eefef6");
+    graphDirty = true;
+  }
+
+  function toggleAttractant() {
+    attractant = attractant === "KRILL" ? "DAYLIGHT" : "KRILL";
+    graphDirty = true;
+    addMessage(attractant + " attractant");
+  }
+
+  function completeLeg(flock) {
+    const poleTop = flock.origin === "top";
+    const posX = flock.x;
+    const posY = flock.y;
+    if (flock.leg === 0) {
+      scorePoints(40, posX, posY - 16, "#ffd983");
+      if (flock.naturalEligible) scorePoints(25, posX + 28, posY + 8, "#9dffd4", "+25 FLOW");
+      flock.outboundSide = flock.routeSide;
+      flock.leg = 1;
+      flock.needsRepath = true;
+      addParticles(posX, posY, "#eefef6", 18, 140);
+    } else {
+      scorePoints(160, posX, posY - 16, "#ffd983");
+      if (flock.outboundSide && flock.routeSide && flock.outboundSide !== flock.routeSide) {
+        scorePoints(60, posX + 38, posY, "#9dffd4", "+60 PURITY");
+      }
+      if (flock.naturalEligible) scorePoints(25, posX - 30, posY + 10, "#9dffd4", "+25 FLOW");
+      comboCount++;
+      comboTimer = 1.35;
+      const mult = comboCount >= 2 ? comboCount : 1;
+      if (mult >= 2) {
+        scorePoints(20 * mult, posX, posY + 26, "#eefef6", "x" + mult + " REWIRE");
+      }
+      flock.dead = true;
+      addParticles(posX, posY, "#9dffd4", 24, 160);
+    }
+  }
+
+  function updateCursor(dt) {
+    let dx = 0;
+    let dy = 0;
+    if (keys.has("arrowleft") || keys.has("a")) dx -= 1;
+    if (keys.has("arrowright") || keys.has("d")) dx += 1;
+    if (keys.has("arrowup") || keys.has("w")) dy -= 1;
+    if (keys.has("arrowdown") || keys.has("s")) dy += 1;
+    const mag = Math.hypot(dx, dy) || 1;
+    cursor.x += dx / mag * cursor.speed * dt;
+    cursor.y += dy / mag * cursor.speed * dt;
+    cursor.x = clamp(cursor.x, arena.x + 10, arena.x + arena.w - 10);
+    cursor.y = clamp(cursor.y, arena.y + 10, arena.y + arena.h - 10);
+  }
+
+  function updateTrays(dt) {
+    for (const tray of legalTrays) {
+      const speedMul = 1 + difficulty() * 0.55 + finalRush() * 0.35;
+      tray.x += tray.vx * speedMul * dt;
+      if (tray.x < arena.x + 44 || tray.x + tray.w > arena.x + arena.w - 44) tray.vx *= -1;
+    }
+  }
+
+  function updateFlocks(dt) {
+    for (const flock of flocks) {
+      if (graphDirty) flock.needsRepath = true;
+      if (flock.repathFlash > 0) flock.repathFlash -= dt;
+      if (flock.needsRepath || flock.lastGraphVersion !== graphVersion) {
+        const ok = assignPath(flock, false);
+        if (!ok) {
+          flock.stalled += dt * 1.5;
+        } else {
+          flock.repathFlash = 0.5;
+        }
+      }
+      if (!flock.route.length) {
+        flock.stalled += dt;
+        if (flock.stalled > 2.6) {
+          flock.dead = true;
+          scorePoints(-35, flock.x, flock.y - 18, "#ff7f69");
+          citation = clamp(citation + 8, 0, 100);
+          addMessage("Flock knotted");
+        }
+        continue;
+      }
+      const target = flock.route[Math.min(flock.routeIndex + 1, flock.route.length - 1)];
+      const angle = Math.atan2(target.y - flock.y, target.x - flock.x);
+      const onVein = true;
+      const desiredSpeed = flock.speed * (onVein ? 1.22 : 0.9) * (pulseTimer > 0 ? 1.18 : 1);
+      flock.vx = lerp(flock.vx, Math.cos(angle) * desiredSpeed, 0.11);
+      flock.vy = lerp(flock.vy, Math.sin(angle) * desiredSpeed, 0.11);
+      flock.x += flock.vx * dt;
+      flock.y += flock.vy * dt;
+      flock.wing += dt * 12;
+      if (dist(flock.x, flock.y, target.x, target.y) < 18) {
+        flock.routeIndex = Math.min(flock.routeIndex + 1, flock.route.length - 1);
+      }
+      const speedNow = Math.hypot(flock.vx, flock.vy);
+      flock.stalled = speedNow < 18 ? flock.stalled + dt : Math.max(0, flock.stalled - dt * 0.6);
+      if (flock.stalled > 2.6) {
+        flock.dead = true;
+        scorePoints(-35, flock.x, flock.y - 18, "#ff7f69");
+        citation = clamp(citation + 10, 0, 100);
+        addParticles(flock.x, flock.y, "#ff7f69", 18, 140);
+        continue;
+      }
+      if (flock.leg === 0 && ((flock.origin === "top" && flock.y >= arena.y + arena.h - 44) || (flock.origin === "bottom" && flock.y <= arena.y + 44))) {
+        completeLeg(flock);
+      } else if (flock.leg === 1 && ((flock.origin === "top" && flock.y <= arena.y + 44) || (flock.origin === "bottom" && flock.y >= arena.y + arena.h - 44))) {
+        completeLeg(flock);
+      }
+    }
+    for (let i = flocks.length - 1; i >= 0; i--) {
+      if (flocks[i].dead) flocks.splice(i, 1);
+    }
+  }
+
+  function updateRun(dt) {
+    worldTime += dt;
+    timeLeft = Math.max(0, timeLeft - dt);
+    pulseTimer = Math.max(0, pulseTimer - dt);
+    pulseCooldown = Math.max(0, pulseCooldown - dt);
+    messageTimer = Math.max(0, messageTimer - dt);
+    comboTimer = Math.max(0, comboTimer - dt);
+    shake = Math.max(0, shake - dt * 2);
+
+    updateCursor(dt);
+    updateTrays(dt);
+    for (const d of droplets) d.age += dt;
+    if (graphDirty) rebuildGraph();
+
+    spawnTimer -= dt;
+    if (spawnTimer <= 0) {
+      spawnFlock(Math.random() < 0.5 ? "top" : "bottom");
+      const base = 5.2 - difficulty() * 2.8 - finalRush() * 0.8;
+      spawnTimer = Math.max(1.15, base + rand(-0.65, 0.65));
+    }
+
+    updateFlocks(dt);
+    const stallPressure = flocks.filter(f => f.stalled > 1.2).length;
+    if (stallPressure >= 4) {
+      finalReason = "Terminal gridlock";
+      endRun();
+      return;
+    }
+    if (citation >= 100) {
+      finalReason = "Citation meter filled";
+      endRun();
+      return;
+    }
+    if (timeLeft <= 0) {
+      finalReason = "Shift over";
+      endRun();
+      return;
+    }
+
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+      p.vx *= 0.98;
+      p.vy *= 0.98;
+      if (p.life <= 0) particles.splice(i, 1);
+    }
+    for (let i = popups.length - 1; i >= 0; i--) {
+      const p = popups[i];
+      p.life -= dt;
+      p.y -= 24 * dt;
+      if (p.life <= 0) popups.splice(i, 1);
+    }
+  }
+
+  function endRun() {
+    best = Math.max(best, score);
+    screen = "gameover";
+  }
+
+  function handlePressed() {
+    if (screen === "title") {
+      if (pressed.has(" ") || pressed.has("enter")) {
+        resetRun();
+        screen = "play";
+      }
+      pressed.clear();
+      return;
+    }
+    if (screen === "gameover") {
+      if (pressed.has(" ") || pressed.has("enter")) {
+        resetRun();
+        screen = "play";
+      } else if (pressed.has("escape")) {
+        screen = "title";
+      }
+      pressed.clear();
+      return;
+    }
+    if (pressed.has(" ")) trySpit();
+    if (pressed.has("shift")) scrapeNearest();
+    if (pressed.has("z")) toggleAttractant();
+    if (pressed.has("x")) pulseMigration();
+    pressed.clear();
+  }
+
+  function drawBackground() {
+    const g = ctx.createLinearGradient(0, arena.y, 0, arena.y + arena.h);
+    g.addColorStop(0, "#dbe2d8");
+    g.addColorStop(0.5, "#cfd7ce");
+    g.addColorStop(1, "#bcc8bf");
+    ctx.fillStyle = g;
+    ctx.fillRect(arena.x, arena.y, arena.w, arena.h);
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(arena.x, arena.y, arena.w, arena.h);
+    ctx.clip();
+
+    for (let x = arena.x; x <= arena.x + arena.w; x += 42) {
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(x, arena.y);
+      ctx.lineTo(x, arena.y + arena.h);
+      ctx.stroke();
+    }
+    for (let y = arena.y; y <= arena.y + arena.h; y += 42) {
+      ctx.strokeStyle = "rgba(22,48,40,0.08)";
+      ctx.beginPath();
+      ctx.moveTo(arena.x, y);
+      ctx.lineTo(arena.x + arena.w, y);
+      ctx.stroke();
+    }
+
+    for (const o of obstacles) {
+      if (o.type === "bench") {
+        ctx.fillStyle = "#7e6a4f";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        ctx.fillStyle = "#584631";
+        ctx.fillRect(o.x + 12, o.y + 12, o.w - 24, o.h - 24);
+      } else {
+        ctx.fillStyle = "#9ca39b";
+        ctx.fillRect(o.x, o.y, o.w, o.h);
+        for (let i = 0; i < 6; i++) {
+          ctx.strokeStyle = i % 2 === 0 ? "#f2c45f" : "#534731";
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(o.x, o.y + 10 + i * 24);
+          ctx.lineTo(o.x + o.w, o.y + 10 + i * 24);
+          ctx.stroke();
+        }
+      }
+    }
+
+    ctx.fillStyle = "#f2d26c";
+    ctx.fillRect(arena.x + 34, arena.y + 220, 18, 310);
+    ctx.fillRect(arena.x + arena.w - 52, arena.y + 220, 18, 310);
+
+    ctx.fillStyle = "#5f8f78";
+    ctx.fillRect(arena.x + arena.w * 0.5 - 124, arena.y - 56, 248, 40);
+    ctx.fillRect(arena.x + arena.w * 0.5 - 148, arena.y + arena.h + 16, 296, 40);
+    ctx.fillStyle = "#f5fff9";
+    ctx.font = "bold 20px Georgia";
+    ctx.textAlign = "center";
+    ctx.fillText("ARCTIC", arena.x + arena.w * 0.5, arena.y - 30);
+    ctx.fillText("ANTARCTIC", arena.x + arena.w * 0.5, arena.y + arena.h + 42);
+
+    for (const tray of legalTrays) {
+      const tg = ctx.createLinearGradient(tray.x, tray.y, tray.x, tray.y + tray.h);
+      tg.addColorStop(0, "#78d69f");
+      tg.addColorStop(1, "#3b855f");
+      ctx.fillStyle = tg;
+      ctx.fillRect(tray.x, tray.y, tray.w, tray.h);
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillRect(tray.x + 10, tray.y + 6, tray.w - 20, 4);
+    }
+
+    for (let i = 0; i < 4; i++) {
+      const gx = arena.x + 126 + i * 248;
+      const gy = arena.y + arena.h * 0.5 - 16;
+      ctx.fillStyle = "#747c76";
+      ctx.fillRect(gx, gy, 66, 32);
+      for (let j = 0; j < 5; j++) {
+        ctx.strokeStyle = "rgba(22,22,22,0.45)";
+        ctx.beginPath();
+        ctx.moveTo(gx + 8 + j * 12, gy + 4);
+        ctx.lineTo(gx + 8 + j * 12, gy + 28);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawVeins() {
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(arena.x, arena.y, arena.w, arena.h);
+    ctx.clip();
+    for (const vein of veins) {
+      const pulse = 0.55 + Math.sin(worldTime * 5 + (vein.ax + vein.ay) * 0.01) * 0.22 + pulseTimer * 0.4;
+      ctx.strokeStyle = `rgba(65,216,194,${0.16 + vein.glow * 0.18})`;
+      ctx.lineWidth = 5 + vein.glow * 5;
+      ctx.beginPath();
+      ctx.moveTo(vein.ax, vein.ay);
+      ctx.lineTo(vein.bx, vein.by);
+      ctx.stroke();
+      ctx.strokeStyle = `rgba(238,254,246,${0.06 + pulse * 0.22})`;
+      ctx.lineWidth = 2 + vein.glow * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(vein.ax, vein.ay);
+      ctx.lineTo(vein.bx, vein.by);
+      ctx.stroke();
+    }
+    for (const d of droplets) {
+      const r = 8 + Math.sin(worldTime * 6 + d.age * 2) * 1.2;
+      const g = ctx.createRadialGradient(d.x, d.y, 1, d.x, d.y, 22);
+      g.addColorStop(0, d.legal ? "rgba(238,254,246,0.95)" : "rgba(157,255,212,0.95)");
+      g.addColorStop(0.4, "rgba(65,216,194,0.55)");
+      g.addColorStop(1, "rgba(65,216,194,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, 22, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = d.legal ? "#eefef6" : "#8ef1d0";
+      ctx.beginPath();
+      ctx.arc(d.x, d.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawFlock(flock) {
+    const angle = Math.atan2(flock.vy || (flock.origin === "top" ? 1 : -1), flock.vx || 0.001);
+    const flap = Math.sin(flock.wing) * 4;
+    ctx.save();
+    ctx.translate(flock.x, flock.y);
+    ctx.rotate(angle);
+    if (flock.repathFlash > 0) {
+      ctx.strokeStyle = `rgba(157,255,212,${flock.repathFlash * 0.8})`;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(0, 0, 15 + flock.repathFlash * 10, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = "#ffffff";
+    ctx.beginPath();
+    ctx.moveTo(11, 0);
+    ctx.lineTo(-7, -5);
+    ctx.lineTo(-3, 0);
+    ctx.lineTo(-7, 5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = "#e9f7ff";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(-2, -1);
+    ctx.lineTo(-12, -8 - flap);
+    ctx.moveTo(-2, 1);
+    ctx.lineTo(-12, 8 + flap);
+    ctx.stroke();
+    ctx.strokeStyle = "#d7f2ff";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-6, 0);
+    ctx.lineTo(-16, -5);
+    ctx.moveTo(-6, 0);
+    ctx.lineTo(-16, 5);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawCursor() {
+    const legal = legalTrays.some(t => cursor.x >= t.x && cursor.x <= t.x + t.w && cursor.y >= t.y && cursor.y <= t.y + t.h);
+    ctx.save();
+    ctx.translate(cursor.x, cursor.y);
+    ctx.strokeStyle = legal ? "#9dffd4" : "#143129";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.arc(0, 0, cursor.r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-cursor.r - 6, 0);
+    ctx.lineTo(-6, 0);
+    ctx.moveTo(6, 0);
+    ctx.lineTo(cursor.r + 6, 0);
+    ctx.moveTo(0, -cursor.r - 6);
+    ctx.lineTo(0, -6);
+    ctx.moveTo(0, 6);
+    ctx.lineTo(0, cursor.r + 6);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawHud() {
+    ctx.fillStyle = "rgba(7,17,15,0.78)";
+    ctx.fillRect(24, 20, 1232, 54);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.strokeRect(24, 20, 1232, 54);
+
+    ctx.fillStyle = "#f8fff8";
+    ctx.font = "bold 22px Georgia";
+    ctx.textAlign = "left";
+    ctx.fillText("LOOGIE LOOP", 42, 54);
+
+    ctx.font = "16px Georgia";
+    ctx.fillStyle = "rgba(248,255,248,0.85)";
+    ctx.fillText("Score " + score, 250, 54);
+    ctx.fillText("Time " + Math.ceil(timeLeft), 390, 54);
+    ctx.fillText("Flocks " + flocks.length, 500, 54);
+    ctx.fillText(attractant, 612, 54);
+
+    ctx.fillStyle = "rgba(255,255,255,0.18)";
+    ctx.fillRect(756, 36, 206, 14);
+    ctx.fillStyle = citation > 70 ? "#ff7f69" : "#f4c55e";
+    ctx.fillRect(756, 36, 206 * (citation / 100), 14);
+    ctx.strokeStyle = "rgba(255,255,255,0.18)";
+    ctx.strokeRect(756, 36, 206, 14);
+    ctx.fillStyle = "#f8fff8";
+    ctx.fillText("Citation", 756, 31);
+
+    ctx.fillStyle = pulseCooldown > 0 ? "rgba(248,255,248,0.38)" : "#eefef6";
+    ctx.fillText("Pulse " + (pulseCooldown > 0 ? pulseCooldown.toFixed(1) + "s" : "READY"), 1000, 54);
+
+    if (messageTimer > 0) {
+      ctx.fillStyle = "rgba(7,17,15,0.72)";
+      ctx.fillRect(arena.x + arena.w * 0.5 - 144, arena.y + 18, 288, 34);
+      ctx.strokeStyle = "rgba(255,255,255,0.1)";
+      ctx.strokeRect(arena.x + arena.w * 0.5 - 144, arena.y + 18, 288, 34);
+      ctx.fillStyle = "#eefef6";
+      ctx.textAlign = "center";
+      ctx.fillText(message, arena.x + arena.w * 0.5, arena.y + 41);
+    }
+  }
+
+  function drawParticles() {
+    for (const p of particles) {
+      ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    for (const p of popups) {
+      ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+      ctx.fillStyle = p.color;
+      ctx.font = "bold 16px Georgia";
+      ctx.textAlign = "center";
+      ctx.fillText(p.text, p.x, p.y);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawTitle() {
+    drawBackground();
+    drawVeins();
+    for (let i = 0; i < Math.min(2, flocks.length); i++) drawFlock(flocks[i]);
+    ctx.fillStyle = "rgba(7,17,15,0.72)";
+    ctx.fillRect(186, 142, 908, 540);
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.strokeRect(186, 142, 908, 540);
+
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f8fff8";
+    ctx.font = "bold 64px Georgia";
+    ctx.fillText("Loogie Loop", W * 0.5, 248);
+    ctx.font = "24px Georgia";
+    ctx.fillStyle = "#9dffd4";
+    ctx.fillText("Route vandalism for migrating terns", W * 0.5, 290);
+
+    ctx.font = "20px Georgia";
+    ctx.fillStyle = "rgba(248,255,248,0.88)";
+    const lines = [
+      "Feed droplets into a living slime network that rewrites the best route in real time.",
+      "KRILL favors compact central cuts. DAYLIGHT favors long edge arcs and side lanes.",
+      "Flocks score by crossing pole to pole, then returning through a different side when possible.",
+      "Illegal spit costs score and fills the citation meter. Legal trays drift, so safe routing moves."
+    ];
+    lines.forEach((line, i) => ctx.fillText(line, W * 0.5, 362 + i * 42));
+
+    ctx.font = "bold 22px Georgia";
+    ctx.fillStyle = "#ffd983";
+    ctx.fillText("WASD / Arrows move   Space spit   Shift scrape   Z attractant   X migration pulse", W * 0.5, 566);
+    ctx.font = "24px Georgia";
+    ctx.fillStyle = "#eefef6";
+    ctx.fillText("Press Space to start", W * 0.5, 626);
+    ctx.font = "18px Georgia";
+    ctx.fillStyle = "rgba(248,255,248,0.66)";
+    ctx.fillText("Best score " + best, W * 0.5, 668);
+  }
+
+  function drawGameOver() {
+    drawBackground();
+    drawVeins();
+    for (const flock of flocks) drawFlock(flock);
+    drawParticles();
+    ctx.fillStyle = "rgba(7,17,15,0.76)";
+    ctx.fillRect(250, 184, 780, 442);
+    ctx.strokeStyle = "rgba(255,255,255,0.14)";
+    ctx.strokeRect(250, 184, 780, 442);
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#f8fff8";
+    ctx.font = "bold 56px Georgia";
+    ctx.fillText("Shift Complete", W * 0.5, 278);
+    ctx.font = "26px Georgia";
+    ctx.fillStyle = "#9dffd4";
+    ctx.fillText(finalReason, W * 0.5, 326);
+    ctx.font = "bold 38px Georgia";
+    ctx.fillStyle = "#ffd983";
+    ctx.fillText("Score " + score, W * 0.5, 408);
+    ctx.font = "22px Georgia";
+    ctx.fillStyle = "#eefef6";
+    ctx.fillText("Best " + best, W * 0.5, 454);
+    ctx.fillText("Citation " + Math.round(citation) + "%", W * 0.5, 492);
+    ctx.fillText("Press Space to run it again", W * 0.5, 560);
+    ctx.fillStyle = "rgba(248,255,248,0.66)";
+    ctx.fillText("Press Escape for title", W * 0.5, 594);
+  }
+
+  function render() {
+    ctx.clearRect(0, 0, W, H);
+    const dx = shake > 0 ? rand(-5, 5) * shake : 0;
+    const dy = shake > 0 ? rand(-5, 5) * shake : 0;
+    ctx.save();
+    ctx.translate(dx, dy);
+    if (screen === "title") {
+      drawTitle();
+    } else if (screen === "play") {
+      drawBackground();
+      drawVeins();
+      for (const flock of flocks) drawFlock(flock);
+      drawCursor();
+      drawHud();
+      drawParticles();
+    } else {
+      drawGameOver();
+    }
+    ctx.restore();
+  }
+
+  let lastTime = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.033, (now - lastTime) / 1000);
+    lastTime = now;
+
+    if (screen === "title") {
+      worldTime += dt;
+      updateTrays(dt);
+      if (graphDirty || !graph) rebuildGraph();
+      if (flocks.length < 2 && Math.random() < 0.015) spawnFlock(Math.random() < 0.5 ? "top" : "bottom");
+      updateFlocks(dt * 0.55);
+      for (const d of droplets) d.age += dt;
+      for (let i = particles.length - 1; i >= 0; i--) {
+        particles[i].life -= dt;
+        if (particles[i].life <= 0) particles.splice(i, 1);
+      }
+      for (let i = popups.length - 1; i >= 0; i--) {
+        popups[i].life -= dt;
+        if (popups[i].life <= 0) popups.splice(i, 1);
+      }
+    } else if (screen === "play") {
+      updateRun(dt);
+    }
+
+    handlePressed();
+    render();
+    requestAnimationFrame(frame);
+  }
+
+  window.addEventListener("keydown", event => {
+    const key = event.key.toLowerCase();
+    if (["arrowup", "arrowdown", "arrowleft", "arrowright", " ", "shift", "z", "x", "enter", "escape", "w", "a", "s", "d"].includes(key)) {
+      event.preventDefault();
+    }
+    if (!keys.has(key)) pressed.add(key);
+    keys.add(key);
+  });
+
+  window.addEventListener("keyup", event => {
+    keys.delete(event.key.toLowerCase());
+  });
+
+  initFixedNodes();
+  resetRun();
+  screen = "title";
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
